@@ -206,10 +206,12 @@ def prepare_captions(entries, duration, width, subtitle_style="clean"):
         clauses, clause = [], []
         for token in tokens:
             if timed and clause and token["start"] - clause[-1]["end"] > 0.45:
-                clauses.append(clause); clause = []
+                clauses.append(clause)
+                clause = []
             clause.append(token)
             if re.search(r"[。！？!?，,；;：:]\s*$", token["text"]):
-                clauses.append(clause); clause = []
+                clauses.append(clause)
+                clause = []
         if clause:
             clauses.append(clause)
         groups = [group for clause in clauses for group in _balanced_groups(clause, max_units)]
@@ -284,7 +286,8 @@ def _run_remotion(root, request, duration, log, progress):
     env = os.environ.copy()
     for candidate in [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe"]:
         if Path(candidate).is_file():
-            env.setdefault("MPT_RENDER_BROWSER", candidate); break
+            env.setdefault("MPT_RENDER_BROWSER", candidate)
+            break
     with log.open("w", encoding="utf-8") as error_log:
         proc = subprocess.Popen([node, str(root / "render.mjs"), str(request)], cwd=root, stdout=subprocess.PIPE, stderr=error_log,
                                 text=True, encoding="utf-8", errors="replace", env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -295,7 +298,8 @@ def _run_remotion(root, request, duration, log, progress):
                     lines.put(line)
             finally:
                 lines.put(None)
-        reader = threading.Thread(target=read_lines, daemon=True); reader.start()
+        reader = threading.Thread(target=read_lines, daemon=True)
+        reader.start()
         deadline = time.monotonic() + max(300, min(7200, duration * 20))
         try:
             while True:

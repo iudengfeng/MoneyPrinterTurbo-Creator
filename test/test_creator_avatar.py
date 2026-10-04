@@ -342,7 +342,7 @@ class CreatorAvatarMediaTest(unittest.TestCase):
         self.assertFalse(store.list_records("avatar_profiles"))
 
     def test_entire_audio_drives_native_api_once_per_chunk_and_survives_final_mux(self):
-        reference = self._reference()
+        self._reference()
         source = self.root / "selected.wav"
         original_bytes = audio_bytes(9.25)
         source.write_bytes(original_bytes)

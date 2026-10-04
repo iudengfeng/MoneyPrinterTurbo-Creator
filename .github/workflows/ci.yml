@@ -32,6 +32,9 @@ jobs:
       MPT_TEST_REDIS_HOST: 127.0.0.1
       MPT_TEST_REDIS_PORT: 6379
       MPT_TEST_REDIS_DB: 15
+      FFMPEG_BINARY: /usr/bin/ffmpeg
+      IMAGEIO_FFMPEG_EXE: /usr/bin/ffmpeg
+      MPT_FFPROBE: /usr/bin/ffprobe
 
     steps:
       - name: Check out repository
@@ -42,6 +45,23 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            creator-renderer/package-lock.json
+            creator-browser/package-lock.json
+
+      - name: Install media tools and Chinese fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg fonts-noto-cjk
+          test -x /usr/bin/ffmpeg
+          test -x /usr/bin/ffprobe
+          test -f /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
@@ -49,6 +69,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen --python ${{ matrix.python-version }}
+
+      - name: Install creator Node components
+        run: |
+          npm ci --prefix creator-renderer
+          npm ci --prefix creator-browser
+
+      - name: Check publishing browser policy
+        if: matrix.python-version == '3.11'
+        run: npm test --prefix creator-browser
 
       - name: Compile Python sources
         run: uv run --no-sync python -m compileall app cli.py main.py webui test docs/skill

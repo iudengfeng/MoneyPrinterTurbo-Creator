@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from app import services
 from app.services.creator import jobs, store, topics
 
 
@@ -86,7 +87,7 @@ class WritingTests(unittest.TestCase):
         client = Mock(return_value="Error: provider authorization failed with details that must never become a script")
         fake_llm = SimpleNamespace(_generate_response=client)
         snapshot = {"llm_provider": "test"}
-        with patch.dict(sys.modules, {"app.services.llm": fake_llm}), self.assertRaisesRegex(topics.TopicGenerationError, "模型请求失败"):
+        with patch.object(services, "llm", fake_llm, create=True), patch.dict(sys.modules, {"app.services.llm": fake_llm}), self.assertRaisesRegex(topics.TopicGenerationError, "模型请求失败"):
             topics.generate_draft("家具怎么选", app_config=snapshot)
         client.assert_called_once()
         self.assertEqual(snapshot, client.call_args.kwargs["app_config"])

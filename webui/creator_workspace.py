@@ -98,7 +98,8 @@ def _extract():
             left,right=st.columns(2)
             if left.button("保存修改",key="creator_save_"+row["id"]):
                 store.update_record("extracts",row["id"],{"text":text})
-                if row.get("txt_path"):Path(row["txt_path"]).write_text(text,"utf-8")
+                if row.get("txt_path"):
+                    Path(row["txt_path"]).write_text(text,"utf-8")
                 st.success("文案已保存。")
             right.button("送到视频制作",key="creator_use_"+row["id"],on_click=_use_script,args=(text,))
             st.download_button("下载文案",text,file_name="口播文案.txt",key="creator_txt_"+row["id"])
@@ -120,7 +121,8 @@ def _topics():
                 try:
                     topics.save_account(name,industry,audience,positioning,references)
                     st.success("账号定位已保存。")
-                except Exception as exc:st.error(str(exc))
+                except Exception as exc:
+                    st.error(str(exc))
     accounts=topics.list_accounts()
     if not accounts:
         return
@@ -128,7 +130,8 @@ def _topics():
     count=st.slider("生成选题数量",1,20,8)
     if st.button("生成选题",type="primary"):
         def generate(progress=None):
-            if progress:progress("根据账号定位生成选题",10)
+            if progress:
+                progress("根据账号定位生成选题",10)
             return topics.generate_topics(account["id"],count=count)
         _submit("账号选题 · "+account["name"],generate)
     st.caption("选题使用原设置中的文案模型和对应服务额度。首版根据你的资料生成，未接入实时热榜。")
@@ -138,7 +141,8 @@ def _topics():
             st.caption(topic.get("reason",""))
             if st.button("生成口播稿",key="creator_write_"+topic["id"]):
                 def write(progress=None,ident=topic["id"]):
-                    if progress:progress("撰写口播文案",10)
+                    if progress:
+                        progress("撰写口播文案",10)
                     return {"text":topics.write_script(ident)}
                 _submit("口播稿 · "+topic["title"],write)
             if topic.get("script"):
@@ -156,13 +160,18 @@ def _voices():
         st.write("保存声音档案")
         provider=st.radio("声音来源",["本机 Duix 已有音色","上传样音克隆"],key="creator_voice_source")
         name=st.text_input("声音名称",key="creator_voice_name")
-        sample=None; selected=None;transcript=""
+        sample=None
+        selected=None
+        transcript=""
         if provider=="本机 Duix 已有音色":
             try:
                 available=duix.list_profiles()["voices"]
-                if available:selected=st.selectbox("已有音色",available,format_func=lambda a:a["name"])
-                else:st.info("Duix 中还没有音色，请先在原软件中创建。")
-            except Exception as exc:st.warning(str(exc))
+                if available:
+                    selected=st.selectbox("已有音色",available,format_func=lambda a:a["name"])
+                else:
+                    st.info("Duix 中还没有音色，请先在原软件中创建。")
+            except Exception as exc:
+                st.warning(str(exc))
         else:
             sample=st.file_uploader("上传清晰样音",type=["wav","mp3","m4a","aac"],key="creator_voice_sample")
             transcript=st.text_area("样音对应文字",help="准确文字有助于克隆声音的发音和节奏。")
@@ -170,13 +179,16 @@ def _voices():
         if st.button("保存声音",key="creator_voice_save",type="primary"):
             try:
                 if provider=="本机 Duix 已有音色":
-                    if not selected:raise ValueError("请先选择音色。")
+                    if not selected:
+                        raise ValueError("请先选择音色。")
                     voices.save_voice(name,"",provider="duix",duix_voice_id=selected["id"])
                 else:
-                    if not sample:raise ValueError("请先上传样音。")
+                    if not sample:
+                        raise ValueError("请先上传样音。")
                     voices.save_voice(name,_stage(sample),transcript=transcript,provider="voxcpm")
                 st.success("声音档案已保存。")
-            except Exception as exc:st.error(str(exc))
+            except Exception as exc:
+                st.error(str(exc))
     with right:
         saved=voices.list_voices()
         if saved:
@@ -186,7 +198,8 @@ def _voices():
                 def preview(progress=None):
                     return {"audio_path":voices.preview_voice(selected_voice["id"],text,progress=progress)}
                 _submit("声音试听 · "+selected_voice["name"],preview)
-        else:st.info("保存第一个声音档案后，就可以生成配音。")
+        else:
+            st.info("保存第一个声音档案后，就可以生成配音。")
     st.divider()
     st.write("数字人口播")
     try:
@@ -202,7 +215,8 @@ def _voices():
         if st.button("生成数字人口播",type="primary",key="creator_avatar_start"):
             _submit("数字人口播",duix.generate,script,model["id"],voice["id"],aspect=aspect)
         st.caption("复用本机 Duix 和现有融合任务队列，分阶段使用显存。")
-    except Exception as exc:st.warning(str(exc))
+    except Exception as exc:
+        st.warning(str(exc))
 
 
 def _rendering():
@@ -221,12 +235,14 @@ def _tasks():
         st.rerun(scope="app")
     st.subheader("任务中心")
     rows=jobs.list_jobs()[:15]
-    if not rows:st.caption("提交任务后，这里会显示进度和结果。")
+    if not rows:
+        st.caption("提交任务后，这里会显示进度和结果。")
     labels={"queued":"排队中","running":"处理中","done":"已完成","failed":"失败","interrupted":"已中断","needs_user":"等待处理"}
     for row in rows:
         with st.expander(row["label"]+" · "+labels.get(row["state"],row["state"]),expanded=row["id"]==st.session_state.get("creator_last_job")):
             st.write(row.get("message",""))
-            if row["state"] in {"queued","running"}:st.progress(float(row.get("progress",0))/100)
+            if row["state"] in {"queued","running"}:
+                st.progress(float(row.get("progress",0))/100)
             result=row.get("result")
             if isinstance(result,dict):
                 if result.get("text"):
@@ -243,8 +259,10 @@ def _tasks():
                     st.video(result["video_path"])
                     st.button("用于剪辑或发布",key="creator_job_video_"+row["id"],on_click=_use_video,args=(result,))
                     st.download_button("下载成片",Path(result["video_path"]).read_bytes(),file_name="成片.mp4",key="creator_job_download_"+row["id"])
-                if result.get("srt_path") and Path(result["srt_path"]).is_file():st.download_button("下载字幕",Path(result["srt_path"]).read_bytes(),file_name="字幕.srt",key="creator_job_srt_"+row["id"])
-            elif isinstance(result,list):st.success("已保存 "+str(len(result))+" 条结果，请刷新对应页面查看。")
+                if result.get("srt_path") and Path(result["srt_path"]).is_file():
+                    st.download_button("下载字幕",Path(result["srt_path"]).read_bytes(),file_name="字幕.srt",key="creator_job_srt_"+row["id"])
+            elif isinstance(result,list):
+                st.success("已保存 "+str(len(result))+" 条结果，请刷新对应页面查看。")
     if st.button("刷新工作台",key="creator_refresh"):
         st.rerun(scope="app")
 

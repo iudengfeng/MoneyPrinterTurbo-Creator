@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
-from app.services.creator import store, topics, publishing, extract
+from app.services.creator import topics, publishing, extract
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -16,7 +16,8 @@ class WorkspaceTests(unittest.TestCase):
         self.env.start()
 
     def tearDown(self):
-        self.env.stop();self.directory.cleanup()
+        self.env.stop()
+        self.directory.cleanup()
 
     def video(self, name="test.mp4"):
         path = Path(self.directory.name) / name
@@ -49,7 +50,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_publishing_preview_is_visible_and_does_not_execute(self):
         account=publishing.save_account("douyin","测试发布账号")
         video=self.video()
-        drafts=publishing.prepare_publish(str(video),"测试标题","测试正文",[account["id"]])
+        publishing.prepare_publish(str(video),"测试标题","测试正文",[account["id"]])
         app=AppTest.from_string("from webui.creator_workspace import render\nrender()",default_timeout=30).run()
         with patch("app.services.creator.publishing.execute_publish") as execute:
             app.radio(key="creator_selected_tab").set_value("发布中心").run()
@@ -132,4 +133,5 @@ class WorkspaceTests(unittest.TestCase):
             prepare.assert_not_called()
 
 
-if __name__=="__main__":unittest.main()
+if __name__=="__main__":
+    unittest.main()
