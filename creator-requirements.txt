@@ -1,0 +1,2 @@
+# Install with this portable application's Python, without upgrading its dependencies.
+yt-dlp==2026.8.19

@@ -1,0 +1,11 @@
+{
+  "name": "mpt-creator-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test test/*.test.mjs", "protocol-check": "node worker.mjs --check", "browser-smoke": "node worker.mjs --smoke"},
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@playwright/mcp": "0.0.83"
+  }
+}

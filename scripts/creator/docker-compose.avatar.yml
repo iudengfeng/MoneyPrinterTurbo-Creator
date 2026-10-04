@@ -1,0 +1,42 @@
+# Minimal Windows Duix service for driving an avatar with an existing audio file.
+# Source: https://github.com/duixcom/Duix-Avatar/blob/main/deploy/docker-compose-lite.yml
+# Docker Hub + registry manifest verified on 2026-10-04 (linux/amd64, latest).
+name: mpt-creator-avatar
+
+services:
+  duix-avatar-gen-video:
+    image: ${DUIX_CREATOR_IMAGE:-guiji2025/duix.avatar@sha256:1970424d219cbb6aebc7566f069041f057ccad618a395139dce002e1fb25d5ed}
+    container_name: duix-avatar-gen-video
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8383:8383"
+    volumes:
+      - type: bind
+        source: ${DUIX_CREATOR_FACE2FACE:-d:/duix_avatar_data/face2face}
+        target: /code/data
+        bind:
+          create_host_path: false
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:512
+    # This is a maximum, not an allocation at container creation. Shared-memory
+    # usage counts against the 12 GiB RAM limit on a 32 GiB Windows machine.
+    shm_size: "8g"
+    mem_limit: "12g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["python", "/code/app_local.py"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; p=json.load(urllib.request.urlopen('http://127.0.0.1:8383/easy/query?code=creator-health-probe',timeout=5)); assert isinstance(p,dict) and 'code' in p"
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 180s
