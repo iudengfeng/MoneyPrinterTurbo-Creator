@@ -32,8 +32,6 @@ jobs:
       MPT_TEST_REDIS_HOST: 127.0.0.1
       MPT_TEST_REDIS_PORT: 6379
       MPT_TEST_REDIS_DB: 15
-      FFMPEG_BINARY: /usr/bin/ffmpeg
-      IMAGEIO_FFMPEG_EXE: /usr/bin/ffmpeg
       MPT_FFPROBE: /usr/bin/ffprobe
 
     steps:
@@ -70,6 +68,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --python ${{ matrix.python-version }}
 
+      - name: Select bundled FFmpeg
+        # Keep media decoding on the binary supplied by the locked Python
+        # dependency rather than the runner's independently updated package.
+        run: |
+          creator_ffmpeg="$(uv run --no-sync python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          test -x "$creator_ffmpeg"
+          echo "IMAGEIO_FFMPEG_EXE=$creator_ffmpeg" >> "$GITHUB_ENV"
+          "$creator_ffmpeg" -version
+
       - name: Install creator Node components
         run: |
           npm ci --prefix creator-renderer
@@ -85,6 +92,13 @@ jobs:
       - name: Lint Python sources
         if: matrix.python-version == '3.11'
         run: uv run --no-sync ruff check app cli.py main.py webui test docs/skill
+
+      - name: Check audio validation environment
+        run: >-
+          uv run --no-sync python -X utf8 -m pytest -q
+          test/services/test_bgm_decoded_audio.py
+          test/services/test_webui_bgm.py
+          test/services/test_webui_custom_audio_upload.py
 
       - name: Run unit tests with coverage
         # pytest 兼容现有 unittest.TestCase，同时会收集仓库中的 pytest 风格
