@@ -2036,10 +2036,16 @@ class TestVideoService(unittest.TestCase):
         )
 
         font_path = os.path.join(utils.font_dir(), "NotoSansSC.ttf")
-        # 缺字不能被方框的可见像素误当作正确渲染；仅支持的文字进入画面检查。
-        for text in ("นี่คือข้อความ", "Αυτό είναι κείμενο"):
+        # 缺字不能被方框的可见像素误当作正确渲染。
+        for text in ("นี่คือข้อความ",):
             with self.subTest(unsupported_text=text):
                 self.assertFalse(vd.subtitle_font_supports_text(font_path, text))
+
+        # 重音字母的组合绘制因 Pillow 的字体布局引擎而异；报告支持时，
+        # 仍必须经过下方真实 TextClip 像素和底边检查。
+        accented_greek = "Αυτό είναι κείμενο για τον έλεγχο της τελευταίας γραμμής"
+        if vd.subtitle_font_supports_text(font_path, accented_greek):
+            cases += (("greek_with_accents", "NotoSansSC.ttf", accented_greek),)
 
         for language, font_name, text in cases:
             font_path = os.path.join(utils.font_dir(), font_name)
