@@ -1,0 +1,13 @@
+{
+  "name": "moneyprinter-creator-hyperframes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline HyperFrames HTML subtitle and original-text overlay renderer",
+  "scripts": {
+    "doctor": "hyperframes doctor --json"
+  },
+  "dependencies": {
+    "gsap": "3.15.0",
+    "hyperframes": "0.8.137"
+  }
+}

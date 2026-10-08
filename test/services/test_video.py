@@ -126,7 +126,7 @@ class TestVideoService(unittest.TestCase):
 
     def test_generate_video_accepts_bundled_font_before_opening_media(self):
         """内置字体必须继续通过校验，不能阻断默认字幕生成链路。"""
-        params = vd.VideoParams(video_subject="Coffee", font_name="STHeitiMedium.ttc")
+        params = vd.VideoParams(video_subject="Coffee", font_name="NotoSansSC.ttf")
         with patch.object(
             vd, "_open_video_clip_quietly", side_effect=RuntimeError("media reached")
         ) as open_video:
@@ -1818,7 +1818,7 @@ class TestVideoService(unittest.TestCase):
     def test_wrap_text(self):
         """test text wrapping function"""
         try:
-            font_path = os.path.join(utils.font_dir(), "STHeitiMedium.ttc")
+            font_path = os.path.join(utils.font_dir(), "NotoSansSC.ttf")
             if not os.path.exists(font_path):
                 self.fail(f"font file not found: {font_path}")
                 
@@ -1896,7 +1896,7 @@ class TestVideoService(unittest.TestCase):
         按最终两行计算。否则宽画面上的短句会绕过自动换行分支并再次裁掉末行。
         """
         font_size = 60
-        font_path = os.path.join(utils.font_dir(), "MicrosoftYaHeiBold.ttc")
+        font_path = os.path.join(utils.font_dir(), "NotoSansSC.ttf")
         text = "SAFE TEXT\nMORE SAFE"
         font = vd.ImageFont.truetype(font_path, font_size)
 
@@ -1980,37 +1980,41 @@ class TestVideoService(unittest.TestCase):
         cases = (
             (
                 "english_without_descenders",
-                "BeVietnamPro-Bold.ttf",
+                "NotoSansSC.ttf",
                 "A man survived the Hiroshima atomic bomb blast",
             ),
             (
                 "vietnamese",
-                "BeVietnamPro-Medium.ttf",
+                "NotoSansSC.ttf",
                 "Tôi vẫn luôn tin vào một tương lai tươi sáng",
             ),
             (
                 "thai",
-                "Charm-Regular.ttf",
+                next((str(path) for path in (
+                    Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts/LeelawUI.ttf",
+                    Path("/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"),
+                    Path("/usr/share/fonts/truetype/noto/NotoSansThaiUI-Regular.ttf"),
+                ) if path.is_file()), "NotoSansSC.ttf"),
                 "นี่คือข้อความสำหรับตรวจสอบบรรทัดสุดท้ายของคำบรรยาย",
             ),
             (
                 "simplified_chinese",
-                "MicrosoftYaHeiBold.ttc",
+                "NotoSansSC.ttf",
                 "这是一个用于检查字幕最后一行是否完整显示的测试句子",
             ),
             (
                 "traditional_chinese",
-                "STHeitiMedium.ttc",
+                "NotoSansSC.ttf",
                 "這是一個用於檢查字幕最後一行是否完整顯示的測試句子",
             ),
             (
                 "cyrillic",
-                "MicrosoftYaHeiNormal.ttc",
+                "NotoSansSC.ttf",
                 "Это текст для проверки последней строки субтитров",
             ),
             (
                 "greek",
-                "STHeitiLight.ttc",
+                "NotoSansSC.ttf",
                 "Αυτό είναι κείμενο για τον έλεγχο της τελευταίας γραμμής",
             ),
         )

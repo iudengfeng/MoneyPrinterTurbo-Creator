@@ -30,10 +30,12 @@ MAX_VIDEO_SECONDS = 120
 MAX_AUDIO_BYTES = 128 * 1024 * 1024
 MAX_AUDIO_SECONDS = 600
 _CHUNK_SECONDS = 8
+_REFERENCE_FPS = 25
 _CONTAINERS = ("duix-avatar-asr", "duix-avatar-tts", "duix-avatar-gen-video")
 _PROCESS_LOCK = threading.Lock()
 _STATUS_LOCK = threading.Lock()
 _STATUS_CACHE = {}
+_LEGACY_AVATAR_ROOT = Path(r"D:\duix_avatar_data\face2face\temp")
 
 
 class _EngineMissingError(RuntimeError):
@@ -42,17 +44,15 @@ class _EngineMissingError(RuntimeError):
 
 def _configuration():
     cfg = duix._settings()
-    cfg.update(avatar_root=Path(r"D:\duix_avatar_data\face2face\temp"),
-               avatar_url="http://127.0.0.1:8383/easy")
-    settings_file = cfg["root"] / "settings.json"
-    if settings_file.is_file():
-        try:
-            custom = json.loads(settings_file.read_text("utf-8"))
-            cfg.update({key: custom[key] for key in ("avatar_root", "avatar_url") if key in custom})
-        except (OSError, ValueError, TypeError):
-            raise RuntimeError("无法读取本机数字人接入配置，请检查融影工作台 settings.json。") from None
     cfg["root"] = Path(cfg["root"]).resolve()
-    cfg["avatar_root"] = Path(cfg["avatar_root"]).expanduser().resolve()
+    avatar_root = os.environ.get("MPT_AVATAR_ROOT", "").strip() or cfg.get("avatar_root")
+    if avatar_root:
+        cfg["avatar_root"] = duix._configured_path(avatar_root, cfg["root"], "人物共享目录")
+    elif cfg.get("legacy_deployment") and _LEGACY_AVATAR_ROOT.is_dir():
+        cfg["avatar_root"] = _LEGACY_AVATAR_ROOT.resolve()
+    else:
+        cfg["avatar_root"] = cfg["root"] / "face2face" / "temp"
+    cfg["avatar_url"] = cfg.get("avatar_url") or "http://127.0.0.1:8383/easy"
     parsed = urlsplit(str(cfg["avatar_url"]))
     if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}
             or parsed.username or parsed.password or parsed.query or parsed.fragment
@@ -73,6 +73,8 @@ def _model_path(cfg, value):
 def list_options() -> list[dict]:
     """Expose reference videos, never voice samples, text or writable DB handles."""
     cfg = _configuration()
+    if cfg.get("configured") is False:
+        return []
     options = []
     database = Path(cfg["hey_db"]).resolve()
     if database.is_file():
@@ -214,6 +216,8 @@ def status() -> dict:
             return dict(cached[1])
         result = {"available": False, "docker_ready": False, "models_count": 0, "reason": ""}
         try:
+            if cfg.get("configured") is False:
+                raise RuntimeError("本机 Duix 尚未配置，基础配音与图文成片可继续使用。")
             result["models_count"] = sum(bool(row["available"]) for row in list_options())
             if not cfg["root"].is_dir() or not cfg["avatar_root"].is_dir():
                 raise RuntimeError("未找到 Duix 共享目录或融影接入目录，请检查本机安装路径。")
@@ -236,7 +240,7 @@ def status() -> dict:
 
 
 def list_jobs() -> list[dict]:
-    return store.list_records("avatar_jobs")
+    return [row for row in store.list_records("avatar_jobs") if not row.get("internal")]
 
 
 def _atomic_json(path, value):
@@ -444,6 +448,63 @@ def _audio_chunks(audio, folder):
     return chunks
 
 
+def _reference_frames(reference):
+    """Count the actual 25 fps video timeline, independent of an audio track."""
+    result = _run_media(["-loglevel", "error", "-i", reference, "-map", "0:v:0", "-an",
+                         "-vf", f"fps={_REFERENCE_FPS}", "-progress", "pipe:1", "-f", "null", "-"], timeout=600)
+    counts = re.findall(r"^frame=(\d+)\s*$", result.stdout, flags=re.MULTILINE)
+    frames = int(counts[-1]) if counts else 0
+    if not frames or frames > MAX_VIDEO_SECONDS * _REFERENCE_FPS:
+        raise ValueError(f"人物参考视频需要有效画面，最长 {MAX_VIDEO_SECONDS} 秒。")
+    return frames
+
+
+def _prepare_reference_chunks(reference, chunks, reference_frames, cfg, ident, *, allow_reference_reuse=False):
+    """Advance through the reference continuously; wrap only when requested.
+
+    Normalize once so every cut and optional wrap uses the same exact 25 fps
+    timeline. All generated paths are job-owned files inside the native mount.
+    """
+    normalized = cfg["avatar_root"] / f"mpt-avatar-{ident}-reference.mp4"
+    _run_media(["-loglevel", "error", "-i", reference, "-map", "0:v:0", "-an",
+                "-vf", f"fps={_REFERENCE_FPS},setsar=1", "-frames:v", str(reference_frames),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart", normalized])
+    references = []
+    for index, chunk in enumerate(chunks):
+        start = round(chunk["start"] * _REFERENCE_FPS)
+        count = max(1, math.ceil(chunk["duration"] * _REFERENCE_FPS - 1e-9))
+        if not allow_reference_reuse and start + count > reference_frames:
+            raise ValueError("人物参考动作不足以覆盖完整配音，请上传更长参考视频。")
+        offset = start % reference_frames if allow_reference_reuse else start
+        source_spans, remaining, cursor = [], count, offset
+        while remaining:
+            take = min(remaining, reference_frames - cursor)
+            source_spans.append({"start_frame": cursor, "end_frame": cursor + take,
+                                 "start": cursor / _REFERENCE_FPS, "end": (cursor + take) / _REFERENCE_FPS})
+            remaining -= take
+            cursor = 0
+        target = cfg["avatar_root"] / f"mpt-avatar-{ident}-reference-{index:02d}.mp4"
+        arguments = ["-loglevel", "error"]
+        if allow_reference_reuse:
+            arguments += ["-stream_loop", "-1"]
+        arguments += ["-ss", f"{offset / _REFERENCE_FPS:.8f}", "-i", normalized, "-map", "0:v:0", "-an",
+                      "-frames:v", str(count), "-vf", f"fps={_REFERENCE_FPS},setsar=1", "-c:v", "libx264",
+                      "-preset", "veryfast", "-crf", "18", "-threads", "2", "-pix_fmt", "yuv420p",
+                      "-movflags", "+faststart", target]
+        _run_media(arguments)
+        actual_frames = _reference_frames(target)
+        if actual_frames != count:
+            raise RuntimeError("人物参考片段时长不足，已停止生成；请使用完整参考视频。")
+        row = {"path": target, "reference_offset": offset / _REFERENCE_FPS,
+               "reference_start_frame": offset, "reference_frames": count,
+               "reference_source_spans": source_spans,
+               "reference_reused": start >= reference_frames or len(source_spans) > 1}
+        chunk.update({key: value for key, value in row.items() if key != "path"})
+        references.append(row)
+    return references
+
+
 def _wait_native(session, cfg, progress):
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
@@ -466,7 +527,10 @@ def _native_clip(session, cfg, chunk, reference, folder, ident, index, progress)
     marker = folder / f"avatar-{index:02d}.json"
     payload = {"audio_url": shared_name, "video_url": reference.relative_to(cfg["avatar_root"]).as_posix(),
                "code": code, "chaofen": 0, "watermark_switch": 0, "pn": 1}
-    _atomic_json(marker, {"code": code, "state": "submitting"})
+    context = {"code": code, "audio_start": chunk.get("start", 0), "audio_duration": chunk.get("duration"),
+               "reference_path": str(reference), "reference_offset": chunk.get("reference_offset", 0),
+               "reference_source_spans": chunk.get("reference_source_spans", [])}
+    _atomic_json(marker, dict(context, state="submitting"))
     try:
         response = session.post(cfg["avatar_url"] + "/submit", json=payload, timeout=(5, 30))
         response.raise_for_status()
@@ -475,7 +539,7 @@ def _native_clip(session, cfg, chunk, reference, folder, ident, index, progress)
             raise ValueError("invalid submit response")
         if data.get("code") != 10000:
             raise RuntimeError("数字人片段提交失败：" + str(data.get("msg") or "本机引擎拒绝任务")[:200])
-        _atomic_json(marker, {"code": code, "state": "running"})
+        _atomic_json(marker, dict(context, state="running"))
         deadline = time.monotonic() + 900
         cancel_requested = False
         while time.monotonic() < deadline:
@@ -492,7 +556,7 @@ def _native_clip(session, cfg, chunk, reference, folder, ident, index, progress)
                     raise RuntimeError("数字人引擎返回了无效或目录外的结果文件。")
                 target = folder / f"avatar-{index:02d}.mp4"
                 shutil.copy2(remote, target)
-                _atomic_json(marker, {"code": code, "state": "done", "path": str(target)})
+                _atomic_json(marker, dict(context, state="done", path=str(target)))
                 if cancel_requested:
                     raise CancelledError("当前口型片段已完成并保留，数字人任务已取消。")
                 return target
@@ -531,10 +595,12 @@ def _assemble(clips, chunks, audio, folder, aspect):
     return output
 
 
-def generate(audio_path, model_id, script="", aspect="9:16", progress=None, source_narration_id="") -> dict:
+def generate(audio_path, model_id, script="", aspect="9:16", progress=None, source_narration_id="", *, allow_reference_reuse=False) -> dict:
     """Drive native lips from an existing audio version, preserving its timing."""
     if aspect not in {"9:16", "16:9"}:
         raise ValueError("数字人视频支持 9:16 和 16:9。")
+    if not isinstance(allow_reference_reuse, bool):
+        raise ValueError("人物动作复用选项需要明确开启或关闭。")
     if not re.fullmatch(r"(?:duix:[1-9]\d*|local:[a-f0-9]{32})", str(model_id or "")):
         raise ValueError("请选择有效的人物形象。")
     script = str(script or "").strip()
@@ -548,7 +614,7 @@ def generate(audio_path, model_id, script="", aspect="9:16", progress=None, sour
     if not option or not option.get("available"):
         raise ValueError("所选人物不存在或参考视频已缺失，请刷新形象列表。")
     reference = Path(option["video_path"])
-    _video_info(reference)
+    reference_duration = _video_info(reference)
     source = Path(str(audio_path or "")).expanduser().resolve()
     if source_narration_id:
         narration = store.get_record("narrations", source_narration_id)
@@ -559,17 +625,40 @@ def generate(audio_path, model_id, script="", aspect="9:16", progress=None, sour
     folder = store.data_root() / "avatars" / ident
     folder.mkdir(parents=True, exist_ok=False)
     metadata = {"state": "preparing", "model_id": model_id, "model_name": option["name"], "script": script,
-                "aspect": aspect, "source_audio_name": source.name, "source_narration_id": source_narration_id}
+                "aspect": aspect, "source_audio_name": source.name, "source_narration_id": source_narration_id,
+                "reference_duration": reference_duration, "allow_reference_reuse": allow_reference_reuse,
+                "reference_strategy": "continuous", "reference_fps": _REFERENCE_FPS}
     store.save_record("avatar_jobs", ident, metadata)
     warnings = []
+    lease_warnings = []
     session = requests.Session()
     session.trust_env = False
     try:
         duix._report(progress, "验证并准备已有配音", 2)
         audio, original, duration = _prepare_audio(source, folder)
-        chunks = _audio_chunks(audio, folder)
         store.update_record("avatar_jobs", ident, {"audio_path": str(audio), "original_audio_path": str(original), "duration": duration})
-        with _gpu_lease(cfg, ident) as warnings:
+        reference_frames = _reference_frames(reference)
+        reference_duration = reference_frames / _REFERENCE_FPS
+        needs_reuse = math.ceil(duration * _REFERENCE_FPS - 1e-9) > reference_frames
+        strategy = "whole_reference_loop" if needs_reuse and allow_reference_reuse else "continuous"
+        store.update_record("avatar_jobs", ident, {"reference_duration": reference_duration,
+                            "reference_frame_count": reference_frames, "reference_strategy": strategy})
+        if needs_reuse and not allow_reference_reuse:
+            raise ValueError(f"人物参考动作只有 {reference_duration:.2f} 秒，当前配音为 {duration:.2f} 秒。"
+                             f"请上传至少 {duration:.2f} 秒的参考视频，或搭配图文素材缩短人物出镜时长；"
+                             "如接受动作重复，请勾选“允许复用人物动作”后重试。原配音已保留，不会截断或重复播放。")
+        if needs_reuse:
+            warnings.append(f"已允许复用人物动作：参考视频 {reference_duration:.2f} 秒短于配音 {duration:.2f} 秒，"
+                            "仅在整段参考动作结束后从头复用；口播配音播放一次。")
+        chunks = _audio_chunks(audio, folder)
+        duix._report(progress, "按配音时间裁剪连续人物动作", 4)
+        references = _prepare_reference_chunks(reference, chunks, reference_frames, cfg, ident,
+                                               allow_reference_reuse=allow_reference_reuse)
+        store.update_record("avatar_jobs", ident, {"chunk_count": len(chunks), "warnings": warnings,
+                            "reference_chunks": [{"audio_start": chunk["start"], "audio_duration": chunk["duration"],
+                                                  **{key: str(value) if key == "path" else value for key, value in row.items()}}
+                                                 for chunk, row in zip(chunks, references)]})
+        with _gpu_lease(cfg, ident) as lease_warnings:
             duix._report(progress, "准备本机数字人口型引擎", 5)
             _set_running("duix-avatar-asr", False)
             _set_running("duix-avatar-tts", False)
@@ -580,22 +669,24 @@ def generate(audio_path, model_id, script="", aspect="9:16", progress=None, sour
             try:
                 for index, chunk in enumerate(chunks):
                     duix._report(progress, f"生成口型片段 {index + 1}/{len(chunks)}", 12 + 65 * index / len(chunks))
-                    clips.append(_native_clip(session, cfg, chunk, reference, folder, ident, index, progress))
+                    clips.append(_native_clip(session, cfg, chunk, references[index]["path"], folder, ident, index, progress))
             except BaseException:
                 # The native API has no verified cancellation endpoint. Stop
                 # our leased container before releasing the GPU on uncertainty.
                 try:
                     _set_running("duix-avatar-gen-video", False)
                 except RuntimeError as exc:
-                    warnings.append("口型引擎停止失败：" + str(exc)[:200])
+                    lease_warnings.append("口型引擎停止失败：" + str(exc)[:200])
                 raise
             _set_running("duix-avatar-gen-video", False)
             duix._report(progress, "拼接画面并保留完整原配音", 82)
             output = _assemble(clips, chunks, audio, folder, aspect)
+        warnings.extend(lease_warnings)
         duix._report(progress, "数字人口播已完成", 100)
         return store.update_record("avatar_jobs", ident, {"state": "done", "video_path": str(output),
                                    "clean_video_path": str(output), "subtitles_burned": False, "warnings": warnings})
     except BaseException as exc:
+        warnings.extend(value for value in lease_warnings if value not in warnings)
         store.update_record("avatar_jobs", ident, {"state": "cancelled" if isinstance(exc, (CancelledError, KeyboardInterrupt)) else "failed",
                             "error": str(exc)[:1000], "warnings": warnings})
         raise
@@ -603,4 +694,6 @@ def generate(audio_path, model_id, script="", aspect="9:16", progress=None, sour
         session.close()
         # All names belong to this job; original profile/videos are untouched.
         for path in cfg["avatar_root"].glob(f"mpt-avatar-{ident}-*.wav"):
+            path.unlink(missing_ok=True)
+        for path in cfg["avatar_root"].glob(f"mpt-avatar-{ident}-reference*.mp4"):
             path.unlink(missing_ok=True)

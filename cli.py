@@ -574,7 +574,7 @@ Batch manifests:
         help=(
             "subtitle font filename inside resource/fonts "
             "(default: [ui].font_name from config.toml; "
-            "STHeitiMedium.ttc when unset)"
+            "NotoSansSC.ttf when unset)"
         ),
     )
     subtitle_group.add_argument(
@@ -1530,6 +1530,7 @@ def _validate_cli_files(
                 ) from exc
 
     if params.subtitle_enabled and params.font_name and stop_at == "video":
+        params.font_name = utils.subtitle_font_name(params.font_name, directory=utils.font_dir())
         font_path = _resolve_managed_resource_file(
             params.font_name,
             resource_dir=utils.font_dir(),

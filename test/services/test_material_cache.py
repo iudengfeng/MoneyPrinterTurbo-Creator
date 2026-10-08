@@ -620,6 +620,36 @@ class TestMaterialSearchCache(unittest.TestCase):
         # 前缀不匹配的其它文件属于用户，不能被清理逻辑删除。
         self.assertTrue(unrelated_path.exists())
 
+    def test_cleanup_preserves_same_size_timestamp_replacement_but_deletes_other_stale_entry(self):
+        """Replacement safety relies on inode identity, not only age and size."""
+        now = 2_000_000_000.0
+        stale_mtime = now - material_cache.MATERIAL_SEARCH_CACHE_TTL_SECONDS - 1
+        replaced = self._cache_path()
+        other = material_cache._cache_path(
+            provider="pexels", search_term="other stale", minimum_duration=5,
+            video_aspect=VideoAspect.landscape,
+        )
+        for path in (replaced, other):
+            path.write_bytes(b"old entry")
+            os.utime(path, (stale_mtime, stale_mtime))
+        check_original = material_cache._is_same_cache_file
+
+        def replace_before_check(path, expected):
+            if path == replaced:
+                temporary = Path(self.temp_dir.name) / "new-entry.tmp"
+                temporary.write_bytes(b"new entry")
+                os.utime(temporary, ns=(expected.st_atime_ns, expected.st_mtime_ns))
+                os.replace(temporary, replaced)
+            return check_original(path, expected)
+
+        with patch.object(material_cache, "_is_same_cache_file", side_effect=replace_before_check):
+            deleted = material_cache.cleanup_expired_material_search_cache(now=now, force=True)
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(other.exists())
+        self.assertEqual(replaced.read_bytes(), b"new entry")
+        self.assertEqual(replaced.stat().st_mtime, stale_mtime)
+
     def test_cleanup_keeps_recent_temp_files(self):
         """
         并发搜索时另一个进程可能正在写临时文件。清理必须复用缓存的过期判定，

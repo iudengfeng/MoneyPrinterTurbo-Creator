@@ -1,16 +1,16 @@
-﻿param([switch]$NoBrowser)
+﻿param([switch]$NoBrowser, [switch]$Offline, [switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$portableRoot = Split-Path -Parent $projectRoot
-$pythonPath = Join-Path $portableRoot 'lib\python\python.exe'
-$ffmpegPath = Join-Path $portableRoot 'lib\ffmpeg\ffmpeg-7.0-essentials_build\ffmpeg.exe'
-if (-not (Test-Path -LiteralPath $pythonPath)) { throw '未找到 MoneyPrinterTurbo 自带的 Python，请在便携版目录中启动。' }
-$env:PYTHONPATH = $projectRoot
-$env:PYTHONUTF8 = '1'
-$env:PYTHONIOENCODING = 'utf-8'
-$env:HF_HUB_DISABLE_XET = '1'
-$env:FFMPEG_BINARY = $ffmpegPath
-$env:IMAGEIO_FFMPEG_EXE = $ffmpegPath
+$setupPath = Join-Path $PSScriptRoot 'creator\setup_creator.ps1'
+& $setupPath -Offline:$Offline -CheckOnly:$CheckOnly
+$healthPath = Join-Path $projectRoot 'storage\creator\logs\runtime-health.json'
+$runtimeHealth = Get-Content -LiteralPath $healthPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $runtimeHealth.ready) { throw '运行环境尚未完整准备，请再次双击启动并查看提示。' }
+if ($CheckOnly) { Write-Output '运行环境已就绪。'; return }
+$pythonPath = $runtimeHealth.python
+foreach ($property in $runtimeHealth.environment.PSObject.Properties) {
+    [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, 'Process')
+}
 $logRoot = Join-Path $projectRoot 'storage\creator\logs'
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 $port = 8501

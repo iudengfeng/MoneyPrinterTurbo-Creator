@@ -147,6 +147,32 @@ class TestVideoCacheManager(unittest.TestCase):
         self.assertTrue(active.exists())
         self.assertTrue(unrelated.exists())
 
+    def test_cleanup_preserves_same_size_and_timestamp_atomic_replacement(self):
+        """Identity guards must detect a replacement even when age/size match."""
+        now = 2_000_000_000.0
+        cache_file = self._create_cache_file("a" * 32, 10, now - 40 * 86400)
+        other = self._create_cache_file("b" * 32, 10, now - 40 * 86400)
+        original_iterator = cache_manager._iter_video_cache_entries
+
+        def replace_after_scan(include_temp=False):
+            snapshots = list(original_iterator(include_temp=include_temp))
+            previous = cache_file.stat()
+            replacement = self.cache_dir / "replacement.tmp"
+            replacement.write_bytes(b"new-video!")
+            os.utime(replacement, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+            os.replace(replacement, cache_file)
+            yield from snapshots
+
+        with patch.object(cache_manager.time, "time", return_value=now), patch.object(
+            cache_manager, "_iter_video_cache_entries", side_effect=replace_after_scan
+        ):
+            result = cache_manager.clean_video_cache(30)
+
+        self.assertEqual(result.deleted_count, 1)
+        self.assertFalse(other.exists())
+        self.assertEqual(cache_file.read_bytes(), b"new-video!")
+        self.assertEqual(cache_file.stat().st_mtime, now - 40 * 86400)
+
     def test_invalid_cleanup_age_is_rejected(self):
         with self.assertRaises(ValueError):
             cache_manager.get_video_cache_stats(0)

@@ -8,6 +8,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import wave
@@ -17,31 +18,85 @@ from pathlib import Path
 
 import requests
 
-from . import store
+from . import extract, store
 
 _start_lock = threading.Lock()
 _JOB_TIMEOUT = 3600
 _POLL_SECONDS = 2
 _ARTIFACT_NAMES = ("final.mp4", "narration.wav", "subtitles.srt", "timeline.json")
+_LEGACY_ROOT = Path(r"D:\HeyGemFusion")
+
+
+def _read_settings(path):
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+        return value
+    except (OSError, ValueError, TypeError):
+        raise RuntimeError("本机 Duix 接入配置无法读取，请检查接入 settings.json。") from None
+
+
+def _configured_path(value, base, label):
+    if not isinstance(value, str) or not value.strip() or re.search(r"[\x00-\x1f]", value):
+        raise RuntimeError(f"本机 Duix 的{label}配置无效。")
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else base / path).resolve()
 
 
 def _settings():
-    root = Path(os.environ.get("MPT_FUSION_ROOT", r"D:\HeyGemFusion")).resolve()
+    integration = store.data_root() / "integrations" / "duix"
+    local_file = integration / "settings.json"
+    root_override = os.environ.get("MPT_FUSION_ROOT", "").strip()
+    custom = {}
+    if root_override:
+        root = _configured_path(root_override, Path.cwd(), "接入目录")
+        settings_file = root / "settings.json"
+        custom = _read_settings(settings_file)
+        origin = "environment"
+    elif local_file.is_file():
+        custom = _read_settings(local_file)
+        root_value = custom.get("root") or custom.get("fusion_root")
+        root = _configured_path(root_value, integration, "接入目录") if root_value else integration.resolve()
+        # Existing service settings supply defaults; the local integration wins.
+        if root / "settings.json" != local_file:
+            custom = {**_read_settings(root / "settings.json"), **custom}
+        settings_file, origin = local_file, "integration"
+    elif (_LEGACY_ROOT / "settings.json").is_file():
+        root = _LEGACY_ROOT.resolve()
+        settings_file = root / "settings.json"
+        custom = _read_settings(settings_file)
+        origin = "legacy"
+    else:
+        root, settings_file, origin = integration.resolve(), local_file, "unconfigured"
+    try:
+        ffmpeg = extract.ffmpeg_binary() if not custom.get("ffmpeg") else custom["ffmpeg"]
+    except (RuntimeError, OSError):
+        ffmpeg = ""
     cfg = {
         "root": root,
-        "python": r"C:\shipin\MoneyPrinterTurbo-Portable-Windows-1.3.7\lib\python\python.exe",
+        "python": sys.executable,
         "hey_db": str(Path.home() / "AppData/Roaming/Duix.Avatar/biz.db"),
-        "ffmpeg": r"C:\shipin\MoneyPrinterTurbo-Portable-Windows-1.3.7\lib\ffmpeg\ffmpeg-7.0-essentials_build\ffmpeg.exe",
+        "ffmpeg": ffmpeg,
         "port": 18600,
+        "configured": origin != "unconfigured" and root.is_dir(),
+        "configuration_source": origin,
+        "settings_file": settings_file,
+        "legacy_deployment": root == _LEGACY_ROOT.resolve() and (root / "settings.json").is_file(),
     }
-    settings_file = root / "settings.json"
-    if settings_file.is_file():
-        try:
-            custom = json.loads(settings_file.read_text("utf-8"))
-            cfg.update({key: custom[key] for key in ("python", "hey_db", "port", "ffmpeg") if key in custom})
-        except (OSError, ValueError):
-            raise RuntimeError("本机 Duix 接入配置无法读取，请检查融影工作台 settings.json。") from None
-    cfg["hey_db"] = os.environ.get("MPT_DUIX_DB", cfg["hey_db"])
+    cfg.update({key: custom[key] for key in ("python", "hey_db", "port", "ffmpeg", "avatar_root", "avatar_url") if key in custom})
+    for key, label in (("python", "Python"), ("hey_db", "人物数据库")):
+        cfg[key] = str(_configured_path(cfg[key], root, label))
+    if cfg["ffmpeg"]:
+        if not isinstance(cfg["ffmpeg"], str) or re.search(r"[\x00-\x1f]", cfg["ffmpeg"]):
+            raise RuntimeError("本机 Duix 的音视频工具配置无效。")
+        detected = shutil.which(cfg["ffmpeg"])
+        cfg["ffmpeg"] = detected or str(_configured_path(cfg["ffmpeg"], root, "音视频工具"))
+    database_override = os.environ.get("MPT_DUIX_DB", "").strip()
+    if database_override:
+        cfg["hey_db"] = str(_configured_path(database_override, root, "人物数据库"))
     cfg["port"] = _positive_id(cfg["port"])
     if cfg["port"] > 65535:
         raise ValueError("本机 Duix 服务端口无效。")
@@ -56,7 +111,10 @@ def _positive_id(value):
 
 def list_profiles() -> dict:
     """Read only public profile columns; never expose reference audio or text."""
-    db_path = Path(_settings()["hey_db"]).resolve()
+    cfg = _settings()
+    if cfg.get("configured") is False:
+        return {"models": [], "voices": [], "message": "本机 Duix 尚未配置，基础配音与图文成片可继续使用。"}
+    db_path = Path(cfg["hey_db"]).resolve()
     if not db_path.is_file():
         return {"models": [], "voices": [], "message": "未找到本机 Duix 音色数据库。"}
     try:
@@ -114,6 +172,8 @@ def _engine_busy(root):
 
 def _connect(progress=None):
     cfg = _settings()
+    if cfg.get("configured") is False:
+        raise RuntimeError("本机 Duix 尚未配置，请先配置数字人接入目录；基础配音与图文成片无需 Duix。")
     base = f"http://127.0.0.1:{cfg['port']}"
     session = _session()
     with _start_lock:

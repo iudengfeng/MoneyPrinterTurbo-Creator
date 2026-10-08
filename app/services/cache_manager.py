@@ -95,7 +95,14 @@ def _iter_video_cache_entries(include_temp: bool = False) -> Iterator[_VideoCach
                 # 不跟随符号链接，确保清理逻辑不会越过默认缓存目录边界。
                 if not entry.is_file(follow_symlinks=False):
                     continue
-                stat_result = entry.stat(follow_symlinks=False)
+                # Windows DirEntry.stat reports zero device/inode identifiers.
+                # Obtain the same real identity used by the pre-delete check;
+                # otherwise every unchanged Windows file looks replaced.
+                stat_result = (
+                    os.stat(entry.path, follow_symlinks=False)
+                    if os.name == "nt"
+                    else entry.stat(follow_symlinks=False)
+                )
             except OSError as exc:
                 logger.warning(
                     f"failed to inspect video cache file: file={entry.name}, error={exc}"

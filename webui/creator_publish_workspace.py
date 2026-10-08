@@ -437,7 +437,7 @@ def _task_history(accounts, tasks):
 
 def render():
     _collect()
-    st.markdown('<div class="script-eyebrow">STEP 06 · 发布中心</div>', unsafe_allow_html=True)
+    st.markdown('<div class="script-eyebrow">STEP 05 · 封面与发布</div>', unsafe_allow_html=True)
     st.markdown('<div class="publish-brief"><h2>核对素材，准备发布。</h2><p>管理账号、保存发布预览，再把确认过的作品交给平台。</p></div>', unsafe_allow_html=True)
     notice = st.session_state.pop("creator_publish_notice", None)
     if notice:

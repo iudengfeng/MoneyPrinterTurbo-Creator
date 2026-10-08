@@ -1,2 +1,6 @@
 # Install with this portable application's Python, without upgrading its dependencies.
 yt-dlp==2026.8.19
+# Public competitor collection runs in a separate Python subprocess. Install this
+# dependency into storage/creator/vendor/scrapling with --target; do not upgrade
+# the portable app's shared Python packages or download browser binaries.
+scrapling[fetchers]==0.4.15

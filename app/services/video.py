@@ -818,7 +818,7 @@ def delete_files(files: List[str] | str):
             logger.warning(f"failed to delete temporary file {file}: {str(e)}")
 
 
-def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
+def get_bgm_file(bgm_type: str = "", bgm_file: str = ""):
     if not bgm_type:
         return ""
 
@@ -1492,8 +1492,7 @@ def generate_video(
 
     font_path = ""
     if params.subtitle_enabled:
-        if not params.font_name:
-            params.font_name = "STHeitiMedium.ttc"
+        params.font_name = utils.subtitle_font_name(params.font_name, directory=utils.font_dir())
         # API 入口虽已预检，WebUI、CLI 和内部调用仍可直接进入渲染层；
         # 始终以真实路径校验字体必须留在 resource/fonts，阻断绝对路径、
         # ../ 穿越及指向目录外的符号链接，再交给 PIL/MoviePy 打开。

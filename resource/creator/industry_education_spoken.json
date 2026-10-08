@@ -1,0 +1,20 @@
+{
+  "industry_id": "education_spoken",
+  "industry_name": "教培口播",
+  "category": "教培",
+  "video_type": "spoken_content",
+  "scraping_rule": {
+    "content_formats": ["口播", "教程", "攻略", "经验分享", "避坑"],
+    "exclude_formats": ["招生硬广", "纯机构宣传", "招商加盟"],
+    "min_text_length": 100,
+    "prefer_high_comment": true
+  },
+  "keyword_pool": {"must_include": ["体验课", "试听", "怎么选", "避坑", "家长", "课程", "学习", "教育"], "exclude": ["招商加盟"], "long_tail": ["少儿", "年龄段", "校区", "性价比"]},
+  "content_sources": [],
+  "extract_fields": {
+    "base_fields": ["title", "hook_3s", "spoken_script", "bullet_points", "material_clues", "tags"],
+    "industry_extra_fields": {"course": "课程/体验课", "age_group": "适合年龄", "location": "校区地址", "price": "价格"}
+  },
+  "update_policy": {"enabled": false, "interval_hours": 24, "items_per_time": 30},
+  "library_config": {"storage": "creator.sqlite3", "split_by_sub_category": false}
+}

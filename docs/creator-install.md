@@ -1,176 +1,88 @@
-# MoneyPrinterTurbo Creator 安装说明
+# Windows 安装与首次启动
 
-本仓库发布增强版源代码，不包含 Windows 便携安装包、Duix 模型、账号登录数据或个人 API 配置。下面的命令在 Windows PowerShell 中运行；从项目根目录启动。其他系统尚未完成这套增强流程的整体验证。
+新用户下载 **Windows 联网双击启动包**并完整解压后，双击根目录的 **启动数字人口播.cmd**。不要在压缩包内运行，也不要只复制一个启动文件。可以放在带中文或空格的可写文件夹；首次使用保持网络和启动窗口打开，无需预先安装 Python、Node.js 或原 MoneyPrinterTurbo 客户端。
 
-## 可以使用的六个步骤
+启动器先检查组件，准备渲染和发布所需浏览器；缺少的运行组件会联网下载到应用自身目录，校验后安装，再打开本机创作页面。它不会安装全局 Python、Node 或浏览器，不会访问发布账号，也不会调用付费模型、生成数字人或自动发布。下载中断后再次双击即可继续检查已下载的完整组件。
 
-| 步骤 | 功能 | 主要依赖 |
-| --- | --- | --- |
-| 1. 选题和文案 | 参考库、账号定位、AI 选题、仿写、原创与稿件编辑 | AI 功能使用自己配置的文案模型；手工稿件不需要接口 |
-| 2. 配音 | Edge 音色、短试听与完整配音、语速调整、已有 Duix 音色、VoxCPM 云端克隆 | Edge 需要联网；Duix 和 VoxCPM 需要各自的可用服务 |
-| 3. 数字人 | 确认完整配音，选择或导入视频形象，生成口播视频 | 独立安装的 Duix 口型引擎、已有模型和共享目录、可用的 Docker GPU 环境 |
-| 4. 模板剪辑 | Whisper 字幕、四种包装、背景音乐、画幅、调色、定时画中画 | faster-whisper、Node.js、Remotion、FFmpeg |
-| 5. 标题和封面 | AI 标题、正文与话题、真实视频截帧、四种封面排版、上传封面 | AI 标题需要文案模型；手工文字与本机封面不需要接口 |
-| 6. 发布中心 | 抖音和小红书账号、独立文案、发布预览、素材 ZIP、逐项确认发布 | 本地预览和 ZIP 无需账号；浏览器发布需要登录、文案模型与 Playwright MCP |
+本版 Windows 下载包是轻量联网启动包，包含程序、空密钥示例和授权字体；源码 ZIP 也提供同一入口。第一次需要下载独立运行环境和依赖，已准备的完整组件以后直接检查并复用。**首次启动仍需联网；FFmpeg 在用户电脑下载，不作为本项目的 MIT 文件重新分发。** 网络失败会显示提示并保留已有资料。
 
-使用方法及各步骤的限制见[创作工作台说明](creator-workspace.md)。可以先用本地视频完成剪辑、封面和素材包，再配置数字人或发布账号。
+## 打开软件后
 
-## 准备环境
+“数字人口播”默认打开四列首页：**01 IP深度学习 → 02 口播制作 → 03 视频处理 → 04 发布制作**。先导入或编辑文案，选择声音与形象，再生成口播和成片，最后核对标题、封面与发布账号。已有口播视频可以直接导入处理；作品库和客户／品牌档案在左下方，原有工具继续保留。
 
-- Git、Python 3.11、Node.js 22 或更新版本，以及 npm。Python 项目声明为 `>=3.11`，本文采用已验证的 3.11 环境；Node.js 已在 24 上实测。两个 Node 组件自身没有声明 `engines`，其中锁定的 Playwright 依赖要求 Node.js 至少为 20，本文的安装基线为 22。
-- FFmpeg 和 ffprobe，解压后把包含两个程序的目录加入 `PATH`。便携版可使用它自带的 FFmpeg。
-- 已安装的 Microsoft Edge 或 Google Chrome，用于剪辑渲染和账号专用浏览器。Node.js 也要能从 `PATH` 找到，单独设置发布组件的 Node 路径不能代替剪辑的这个要求。
-- 可联网下载 Python/npm 依赖以及首次使用的 Whisper 模型。Duix 仅在使用本机克隆配音或数字人时需要；增加系统内存不能代替口型引擎需要的 GPU 环境。
+首页“生成成片”可以继续准备作品所需的前置阶段，也可以先逐步生成、试听和预览。“一键创作”工具保留视频目的、客户／品牌资料、模板和声音设置，门店、商品、服务及知识创作共用流程。
 
-源码方式先检查当前终端能够找到工具：
+主流程仍然是五步：文案 → 声音 → 画面 → 成片 → 发布资料。既可以一键完成，也可以逐步预览和修改。模板里的商品、价格、案例都是示例，不会直接变成你的经营事实。目标时长用于估算口播稿长，真实时长由实际配音决定。
 
-```powershell
-py -3.11 --version
-node --version
-npm --version
-ffmpeg -version
-ffprobe -version
-```
+第一次建议用现成文案、标准音色和图文画面试做；商品介绍、素材混剪须上传真实图片或视频。AI 写稿需要在“设置”填入自己的文案模型服务和密钥，费用由所选服务决定。标准音色不需要密钥，但配音时需要联网。浏览器发布还需要文案模型配置、用户登录平台并逐项确认；也可以先导出发布资料包自行上传。
 
-## 方式一：从源码安装
+当前发布只接入抖音和小红书，快手、视频号不可选择。定时按钮只下载手动发布清单。数字人需要另外配置可用的Duix服务、自己的形象及相应硬件环境；下载包不带数字人模型、人物视频或声音样本。
 
-在希望保存代码的目录打开 PowerShell，克隆增强版：
-
-```powershell
-git clone https://github.com/iudengfeng/MoneyPrinterTurbo-Creator.git
-Set-Location .\MoneyPrinterTurbo-Creator
-py -3.11 -m venv .venv
-& .\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
-& .\.venv\Scripts\python.exe -m pip install -r .\creator-requirements.txt
-```
-
-`requirements.txt` 安装主程序和 `faster-whisper`。增强版补充文件 `creator-requirements.txt` 安装固定版本的 `yt-dlp`；两个文件都需要。每条安装命令成功后再继续下一条。
-
-安装两个 Node 组件的锁定依赖：
-
-```powershell
-Push-Location .\creator-renderer
-npm ci
-Pop-Location
-Push-Location .\creator-browser
-npm ci
-Pop-Location
-```
-
-首次创建配置；已有 `config.toml` 时这段命令会保留它：
-
-```powershell
-if (-not (Test-Path -LiteralPath '.\config.toml')) {
-    Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.toml'
-}
-```
-
-在同一终端启动：
-
-```powershell
-$env:PYTHONPATH = (Get-Location).Path
-$env:PYTHONUTF8 = '1'
-$env:PYTHONIOENCODING = 'utf-8'
-$env:HF_HUB_DISABLE_XET = '1'
-$env:FFMPEG_BINARY = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
-$env:IMAGEIO_FFMPEG_EXE = $env:FFMPEG_BINARY
-$env:MPT_FFPROBE = (Get-Command ffprobe.exe -ErrorAction Stop).Source
-& .\.venv\Scripts\python.exe -m streamlit run .\webui\Main.py --server.address=127.0.0.1 --server.port=8501 --server.headless=true --server.maxUploadSize=1024 --browser.gatherUsageStats=false
-```
-
-浏览器打开 [http://127.0.0.1:8501/?workspace=creator](http://127.0.0.1:8501/?workspace=creator)。这个终端保持运行；停止时按 `Ctrl+C`。若 8501 已被占用，修改命令中的端口并使用相应网址。
-
-## 方式二：使用已有 Windows 便携版环境
-
-已有可正常使用的 MoneyPrinterTurbo 便携版时，可以在它的根目录另建增强版代码目录，保留原项目。`scripts/start_creator.ps1` 按以下相对位置查找 Python 和 FFmpeg，单独克隆源码后不具备这些文件：
+## 安装包目录约定
 
 ```text
-便携版根目录/
-├─ lib/
-│  ├─ python/python.exe
-│  └─ ffmpeg/ffmpeg-7.0-essentials_build/
-│     ├─ ffmpeg.exe
-│     └─ ffprobe.exe
-├─ MoneyPrinterTurbo/          原项目，可保留
-└─ MoneyPrinterTurbo-Creator/  此增强版代码
-   ├─ scripts/start_creator.ps1
-   └─ webui/Main.py
+应用目录/
+├─ 启动数字人口播.cmd
+├─ 检查运行环境.cmd
+├─ scripts/start_creator.ps1
+├─ scripts/creator/
+│  ├─ setup_creator.ps1
+│  ├─ portable_entry.py
+│  └─ runtime-manifest.json
+├─ runtime/
+│  ├─ python/python.exe             Python 3.11 独立运行环境
+│  ├─ node/node.exe                 Node 22/24，完整发行目录
+│  ├─ ffmpeg/ffmpeg.exe             首次启动下载
+│  ├─ ffmpeg/ffprobe.exe            与 FFmpeg 配套
+│  └─ browser/                     渲染和发布所需的浏览器缓存
+├─ creator-hyperframes/node_modules/
+├─ creator-browser/node_modules/
+├─ resource/fonts/                 Noto Sans SC 及 OFL 许可
+├─ models/whisper-small/           可选离线识别模型
+├─ config.example.toml             空密钥示例
+└─ storage/creator/                使用后创建的客户资料和作品
+   └─ vendor/scrapling/            独立依赖目录，不是客户账号数据
 ```
 
-在含有 `lib` 的便携版根目录打开 PowerShell：
+安装器锁定下载地址与 SHA-256；版本及来源见 `runtime-manifest.json`。Python 使用 [Astral 的独立 CPython 构建](https://github.com/astral-sh/python-build-standalone)，Node 使用 [Node.js 官方发行](https://nodejs.org/dist/)，FFmpeg 使用 [FFmpeg 官方下载页列出的 Windows 构建商](https://ffmpeg.org/download.html#build-windows)。中文字体来自 [Google Fonts 的 Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc)，保留 SIL Open Font License。应用不会分发机器上的微软雅黑或黑体文件。
+
+Python/npm 主依赖保留仓库固定版本；Scrapling 单独安装到 `storage/creator/vendor/scrapling`，避免改变已有配音依赖。不需要为公开参考读取安装另一个爬虫浏览器，不使用发布账号 Cookie。来源可在口播参考库中添加，默认关闭自动更新。
+
+普通首次启动使用应用独立环境。离线检查或启动时也可识别父目录中的旧 `lib/python` 和 `lib/ffmpeg`，仅检查和复用完整旧环境，不对旧版共享 Python 执行安装；缺少组件时请联网正常启动。
+
+## 配置、数据与更新
+
+第一次准备完成时，从 `config.example.toml` 创建 `config.toml`；已有配置不会覆盖。安装器不会复制开发者配置、账号 Cookie、私人数据库、声音样本、人物模板或素材。
+
+客户的品牌档案、文案、作品和专用浏览器账号资料保存在 `storage/creator`。更新前关闭软件并备份自己的 `config.toml` 和 `storage/creator`；不要把这些文件上传到 GitHub。新版文件应解压到新目录，再按需迁移自己的数据，避免用整包覆盖现有客户文件。
+
+Python、Node、FFmpeg、FFprobe、渲染浏览器的路径由启动器按当前解压目录设置，包括 `FFMPEG_BINARY`、`MPT_FFPROBE`、`MPT_NODE_PATH`、`HYPERFRAMES_BROWSER_PATH` 和 `PLAYWRIGHT_BROWSERS_PATH`。不需要手工修改系统 PATH。默认只监听 `127.0.0.1`；8501 被其他应用占用时会找空闲端口并打开实际地址。
+
+## 识别模型与数字人
+
+Whisper 默认使用 CPU、int8、small。识别模型不属于基本运行组件；第一次文案提取或自动字幕会下载到 `storage/creator/models/faster-whisper`，以后复用。完整离线模型也可以放在 `models/whisper-small`，需要配置、权重、词表等全部文件；单独的 `.pt` 文件不能替代。
+
+**Duix 是额外配置，不包含在基本启动包中。** 数字人口型需要客户自己的形象素材、Duix 共享目录、可用的口型服务以及相应 Docker/GPU 环境。自己的 Duix 音色还需要实际可运行的语音服务；下载一个客户端或只启动口型容器，不代表这些能力已经就绪。
+
+本包不带商业人物模板、他人声音样本或配音服务密钥。没有 Duix 时可以先使用文字讲解画面、本地素材及标准音色，或者导入已经生成的口播视频。具体接入目录通过 `MPT_FUSION_ROOT` 指定；原有部署里的盘符只是用户机器配置，不能照搬成新用户默认地址。
+
+## 检查与排障
+
+双击 **检查运行环境.cmd** 可检查已准备的组件，不下载模型、不读取密钥、不登录或发布。检查结果保存在 `storage/creator/logs/runtime-health.json`，启动日志位于同一目录；网址保存在 `address.txt`。`-Offline` 只检查或启动已经完整准备的环境，不会补齐缺少的组件；标准配音、AI 写稿和平台发布各自仍需要联网。
+
+需要终端操作时，在应用目录运行：
 
 ```powershell
-git clone https://github.com/iudengfeng/MoneyPrinterTurbo-Creator.git
-Set-Location .\MoneyPrinterTurbo-Creator
-$creatorPortablePython = (Resolve-Path '..\lib\python\python.exe').Path
-& $creatorPortablePython -m pip install -r .\creator-requirements.txt
-Push-Location .\creator-renderer
-npm ci
-Pop-Location
-Push-Location .\creator-browser
-npm ci
-Pop-Location
-if (-not (Test-Path -LiteralPath '.\config.toml')) {
-    Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.toml'
-}
+# 仅检查已经准备好的组件
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_creator.ps1 -CheckOnly -Offline
+
+# 完成首次准备并打开；保留当前窗口可查看安装提示
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_creator.ps1
+
+# 已准备好后仅启动本机服务，不打开浏览器
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_creator.ps1 -Offline -NoBrowser
 ```
 
-这条路径复用便携版已安装的主程序依赖，只补装增强版 Python 依赖。旧便携版若缺少主程序依赖或版本不兼容，请使用方式一创建独立环境。启动器不安装依赖，默认使用 8501；被其他服务占用时会寻找可用端口，并打开实际地址。地址和启动日志保存在 `storage/creator/logs`。
+无法下载时先检查网络和剩余磁盘空间，再次双击。下载校验失败的文件不会安装。启动器不会删除已有作品、重置登录或替换不完整的旧运行环境目录；遇到目录冲突会明确停止，以便保留现场和数据。
 
-复用原来的 API 设置时，在首次启动前把原项目的私人 `config.toml` 复制到新代码目录；新目录已有配置则先备份并自行合并。不要用 `config.example.toml` 覆盖个人配置。原项目的成片和历史记录不会因为克隆代码自动迁移，迁移 `storage/creator` 前应关闭相关程序并备份。
-
-## 首次配置和模型缓存
-
-在工作台的“基础设置”选择文案模型，填写自己的 API Key、模型和服务地址。选题、文案、AI 标题与浏览器发布使用这里的设置。Edge 标准音色无需 Key，但需要联网；VoxCPM 云端克隆还需要配音设置中的对应 Key 和模型 ID。
-
-Whisper 默认使用 CPU、`int8` 和 `small` 模型。第一次口播提取或自动字幕会下载模型到 `storage/creator/models/faster-whisper`，后续复用缓存。也可以提供完整的 faster-whisper/CTranslate2 格式模型目录 `models/whisper-small` 或 `storage/creator/models/whisper-small`；需要完整配置、权重和词表，单个 OpenAI Whisper `.pt` 文件不能直接替代。下载失败应检查模型源连接和磁盘空间，再重新执行任务。
-
-剪辑会尝试使用已安装的 Edge/Chrome；未找到时 Remotion 可能需要首次下载浏览器。需要明确指定已有浏览器时，在启动前设置 `MPT_RENDER_BROWSER`（剪辑）和 `MPT_BROWSER_PATH`（发布）为浏览器可执行文件的完整路径。发布组件还支持 `MPT_NODE_PATH`。这些设置只在当前终端及其启动的程序中生效。
-
-## Duix 是独立的本机依赖
-
-本仓库不分发 Duix 客户端、模型、Docker 镜像或语音服务。下载 Duix 客户端后，还要分别确认所需引擎和模型可用：
-
-- 数字人口型使用 `duix-avatar-gen-video`、已有 `face2face` 共享数据和 `http://127.0.0.1:8383/easy` 服务。需要能运行其 GPU 容器的 Docker 环境；单独口型生成不需要 ASR/TTS。
-- Duix 已有音色的本机克隆配音还需要原有 ASR/TTS 容器，以及已有融影接入服务目录中的 `server.py`。该外部服务不随本仓库提供。没有这一部署时，可先使用 Edge 配音或自行配置 VoxCPM 云端接口。
-- 导入样音只保存待创建素材；本机新音色仍需在 Duix 中创建，再刷新音色列表。
-
-现有接入使用 `MPT_FUSION_ROOT` 指定本机接入目录，并读取其 `settings.json`。默认路径来自既有部署，换电脑需要覆盖为自己的实际路径。下面只是字段示例，所有 `E:/...` 路径都需要替换，不能照抄为空目录：
-
-```json
-{
-  "python": "E:/YourPython/python.exe",
-  "ffmpeg": "E:/YourFFmpeg/ffmpeg.exe",
-  "hey_db": "E:/YourDuix/biz.db",
-  "port": 18600,
-  "avatar_root": "E:/YourDuixData/face2face/temp",
-  "avatar_url": "http://127.0.0.1:8383/easy"
-}
-```
-
-`python` 是运行既有融影服务的 Python；`hey_db` 是 Duix 的实际数据库，工作台只读取已有音色和人物。也可以用 `MPT_DUIX_DB` 单独指定数据库。启动工作台前在同一终端设置接入目录：
-
-```powershell
-$env:MPT_FUSION_ROOT = 'E:\YourExistingDuixBridge'
-```
-
-若已有模型和共享数据，仅缺少口型容器，可使用仓库的脚本；`-DataRoot` 指向已经包含 `face2face` 的真实 Duix 数据目录：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\creator\setup_avatar.ps1 -DataRoot 'E:\YourExistingDuixData'
-```
-
-这一步会拉取固定摘要的镜像并检查服务；脚本不创建空模型目录，不覆盖配置不同的已有容器。可加 `-Registry docker.1ms.run` 选择脚本支持的镜像源。完成后仍需确保 `settings.json` 的 `avatar_root` 对应同一共享目录中的 `temp`。首次部署 Duix 本身应遵循其官方安装说明。
-
-## 账号、数据和验证范围
-
-在发布中心添加账号备注，打开专用浏览器，由自己扫码登录，再点击“检查登录状态”。登录检查不会调用文案模型。创建发布预览仅保存本地文件和文字；逐项点击“确认发布到该账号”后才会启动发布任务，任务文案与观察到的平台页面会交给所配置的模型。没有账号也可以导出包含实际视频、封面和文字的 ZIP，手工上传。
-
-`config.toml` 保存个人设置。稿件、声音样本、成片、任务、账号专用浏览器目录和默认模型缓存位于 `storage/creator`；账号目录为 `storage/creator/publisher_profiles`。可用 `MPT_CREATOR_DATA` 改数据根目录，放到其他位置后也应独立保护和备份。
-
-仓库已经忽略 `config.toml`、`storage/`、`models/`、`.env` 和依赖目录。**不要提交私人配置及其备份、API Key、数据库、账号 profile、Cookie、声音样本、视频或模型。** 更新增强版前备份配置和数据；使用本增强版仓库更新，原项目更新器可能覆盖增强版入口。
-
-已在 Windows、Python 3.11、Node.js 24 和 Edge 上验证配音、数字人口播、Whisper 字幕、音轨合成、封面、步骤交接及 ZIP 文件一致性；发布协议和登录状态也经过本地模拟检查。已验证真实抖音扫码登录复用和官方上传页识别，**没有在验收中上传或提交真实作品，小红书真实账号流程尚未实测**。平台页面、验证码、提交结果和审核仍需实际检查；结果待核查时先查看平台作品列表，避免重复发布。
-
-没有抖音开放平台授权时使用网页搜索和自己的参考库，不提供虚构播放量或实时爆款榜。授权搜索接口目前只通过模拟响应验证。详细验证记录与功能边界见[创作工作台说明](creator-workspace.md)。
+Windows 10/11 64 位是这套双击启动器的目标平台。其他系统、所有平台的真实发布账号和任意 Duix 部署仍需分别验证；运行环境检查成功只表示基本组件可以运行，不等于付费接口、数字人或平台发布已经配置好。

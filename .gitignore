@@ -48,6 +48,18 @@ htmlcov/
 # Creator workspace runtime and separately locked Node components
 creator-renderer/node_modules/
 creator-renderer/.bundle/
+creator-hyperframes/node_modules/
+creator-hyperframes/renders/
+creator-hyperframes/bin/
 creator-browser/node_modules/
 creator-browser/.browser-smoke/
 creator-browser/.login-smoke/
+/runtime/
+/dist/
+/build/
+/resource/fonts/*
+!/resource/fonts/README.md
+!/resource/fonts/NotoSansSC.ttf
+!/resource/fonts/NotoSansSC-OFL.txt
+/resource/songs/*
+!/resource/songs/README.md

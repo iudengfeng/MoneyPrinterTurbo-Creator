@@ -16,6 +16,7 @@ import wave
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from app.services.creator import avatar, duix, extract, store
@@ -311,10 +312,15 @@ class CreatorAvatarMediaTest(unittest.TestCase):
             self.ffmpeg_env.stop()
         CreatorAvatarTest.tearDown(self)
 
-    def _reference(self):
+    def _reference(self, *, seconds=0.4, dynamic=False):
         path = self.shared / "reference.mp4"
         command = [self.ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
-                   "color=c=blue:s=160x240:r=25", "-t", "0.4", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)]
+                   f"color=c=blue:s=160x240:r=25:d={seconds / 3 if dynamic else seconds}"]
+        if dynamic:
+            for color in ("red", "green"):
+                command += ["-f", "lavfi", "-i", f"color=c={color}:s=160x240:r=25:d={seconds / 3}"]
+            command += ["-filter_complex", "[0:v:0][1:v:0][2:v:0]concat=n=3:v=1:a=0[v]", "-map", "[v]"]
+        command += ["-t", str(seconds), "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)]
         result = subprocess.run(command, capture_output=True, timeout=20,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -341,25 +347,32 @@ class CreatorAvatarMediaTest(unittest.TestCase):
             avatar.import_profile("错误人物", source)
         self.assertFalse(store.list_records("avatar_profiles"))
 
-    def test_entire_audio_drives_native_api_once_per_chunk_and_survives_final_mux(self):
-        self._reference()
-        source = self.root / "selected.wav"
-        original_bytes = audio_bytes(9.25)
-        source.write_bytes(original_bytes)
-        ident = "a" * 32
-        store.save_record("narrations", ident, {"state": "done", "preview": False, "audio_path": str(source)})
+    def _frame_color(self, video, seconds):
+        result = subprocess.run([self.ffmpeg, "-v", "error", "-ss", str(seconds), "-i", str(video),
+                                 "-vf", "scale=1:1", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                capture_output=True, check=True, timeout=30)
+        self.assertEqual(len(result.stdout), 3)
+        color = result.stdout
+        return ("red", "green", "blue")[max(range(3), key=lambda index: color[index])]
+
+    def _generate_native(self, source, *, source_narration_id="", allow_reference_reuse=False):
         received = []
+        submitted = {}
         shared = self.shared
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 received.append(body)
+                submitted[body["code"]] = body
                 # The mock proves file-based protocol and composition, not lips.
                 with wave.open(str(shared / body["audio_url"]), "rb") as audio:
                     body["tested_audio_seconds"] = audio.getnframes() / audio.getframerate()
                 self._send({"code": 10000})
             def do_GET(self):
-                self._send({"code": 10000, "data": {"status": 2, "result": "/reference.mp4"}})
+                code = parse_qs(urlsplit(self.path).query).get("code", [""])[0]
+                body = submitted.get(code)
+                self._send({"code": 10000, "data": {"status": 2 if body else 0,
+                                                    "result": "/" + body["video_url"] if body else ""}})
             def _send(self, data):
                 encoded = json.dumps(data).encode()
                 self.send_response(200)
@@ -377,26 +390,91 @@ class CreatorAvatarMediaTest(unittest.TestCase):
             with patch.object(avatar, "_service_states", return_value={name: False for name in avatar._CONTAINERS}), \
                     patch.object(avatar, "_set_running", side_effect=lambda name, running: changes.append((name, running))), \
                     patch.object(duix, "generate_audio", side_effect=AssertionError("must not synthesize speech")):
-                result = avatar.generate(source, "duix:1", script="使用这条已经生成的配音。", source_narration_id=ident)
+                result = avatar.generate(source, "duix:1", script="使用这条已经生成的配音。",
+                                         source_narration_id=source_narration_id, allow_reference_reuse=allow_reference_reuse)
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+        return result, received, changes
+
+    def test_entire_audio_drives_native_api_once_per_chunk_and_survives_final_mux(self):
+        reference = self._reference(seconds=18, dynamic=True)
+        original_reference, database = reference.read_bytes(), self.database.read_bytes()
+        source = self.root / "selected.wav"
+        original_bytes = audio_bytes(17.25)
+        source.write_bytes(original_bytes)
+        ident = "a" * 32
+        store.save_record("narrations", ident, {"state": "done", "preview": False, "audio_path": str(source)})
+        result, received, changes = self._generate_native(source, source_narration_id=ident)
         self.assertEqual(result["state"], "done")
         self.assertFalse(result["subtitles_burned"])
         self.assertEqual(result["source_narration_id"], ident)
         self.assertEqual(result["source_audio_name"], "selected.wav")
         self.assertEqual(Path(result["original_audio_path"]).read_bytes(), original_bytes)
         self.assertEqual(source.read_bytes(), original_bytes)
-        self.assertEqual(len(received), 2)
-        self.assertEqual([body["tested_audio_seconds"] for body in received], [8, 1.25])
+        self.assertEqual(len(received), 3)
+        self.assertEqual([body["tested_audio_seconds"] for body in received], [8, 8, 1.25])
+        self.assertEqual(len({body["video_url"] for body in received}), 3)
         self.assertTrue(all("voice_id" not in body and "text" not in body for body in received))
-        self.assertAlmostEqual(avatar._wav_duration(Path(result["audio_path"])), 9.25, places=5)
+        self.assertAlmostEqual(avatar._wav_duration(Path(result["audio_path"])), 17.25, places=5)
         info = extract.probe_media(result["video_path"])
-        self.assertAlmostEqual(info["duration"], 9.25, delta=0.08)
+        self.assertAlmostEqual(info["duration"], 17.25, delta=0.08)
+        self.assertEqual([self._frame_color(result["video_path"], second) for second in (0.2, 8.2, 16.2)],
+                         ["blue", "red", "green"])
+        self.assertEqual([row["reference_offset"] for row in result["reference_chunks"]], [0, 8, 16])
+        self.assertEqual(result["reference_strategy"], "continuous")
+        self.assertAlmostEqual(result["reference_duration"], 18, places=4)
+        self.assertFalse(result["warnings"])
+        self.assertEqual(reference.read_bytes(), original_reference)
+        self.assertEqual(self.database.read_bytes(), database)
         self.assertFalse((self.fusion / "service-lease.json").exists())
         self.assertFalse(list(self.shared.glob("mpt-avatar-*.wav")))
+        self.assertFalse(list(self.shared.glob("mpt-avatar-*-reference*.mp4")))
         self.assertEqual(changes[-3:], [(name, False) for name in avatar._CONTAINERS])
+
+    def test_reference_shorter_than_voice_fails_before_gpu_and_keeps_originals(self):
+        reference = self._reference()
+        reference_before, database_before = reference.read_bytes(), self.database.read_bytes()
+        source = self.root / "too-long.wav"
+        original = audio_bytes(2.4)
+        source.write_bytes(original)
+        with patch.object(avatar, "_gpu_lease") as lease, patch.object(avatar, "_native_clip") as native:
+            with self.assertRaisesRegex(ValueError, "0.40 秒.*2.40 秒.*允许复用人物动作"):
+                avatar.generate(source, "duix:1")
+        lease.assert_not_called()
+        native.assert_not_called()
+        result = store.list_records("avatar_jobs")[0]
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(Path(result["original_audio_path"]).read_bytes(), original)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(reference.read_bytes(), reference_before)
+        self.assertEqual(self.database.read_bytes(), database_before)
+        self.assertFalse(list(self.shared.glob("mpt-avatar-*")))
+
+    def test_explicit_reuse_wraps_whole_reference_instead_of_each_eight_second_chunk(self):
+        reference = self._reference(seconds=3, dynamic=True)
+        reference_before = reference.read_bytes()
+        source = self.root / "reuse.wav"
+        original = audio_bytes(9.25)
+        source.write_bytes(original)
+        result, received, _ = self._generate_native(source, allow_reference_reuse=True)
+        self.assertEqual(result["state"], "done")
+        self.assertEqual(result["reference_strategy"], "whole_reference_loop")
+        self.assertEqual(result["reference_duration"], 3)
+        self.assertTrue(any("口播配音播放一次" in warning for warning in result["warnings"]))
+        self.assertEqual([row["reference_offset"] for row in result["reference_chunks"]], [0, 2])
+        self.assertEqual(result["reference_chunks"][1]["reference_source_spans"],
+                         [{"start_frame": 50, "end_frame": 75, "start": 2, "end": 3},
+                          {"start_frame": 0, "end_frame": 7, "start": 0, "end": 0.28}])
+        self.assertEqual(len({row["video_url"] for row in received}), 2)
+        self.assertEqual([self._frame_color(result["video_path"], second) for second in (0.2, 1.2, 2.2, 3.2, 8.2, 9.1)],
+                         ["blue", "red", "green", "blue", "green", "blue"])
+        self.assertAlmostEqual(extract.probe_media(result["video_path"])["duration"], 9.25, delta=0.08)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(reference.read_bytes(), reference_before)
+        self.assertFalse((self.fusion / "service-lease.json").exists())
+        self.assertFalse(list(self.shared.glob("mpt-avatar-*")))
 
     def test_native_failure_restores_leased_services_and_preserves_selected_audio_for_retry(self):
         self._reference()

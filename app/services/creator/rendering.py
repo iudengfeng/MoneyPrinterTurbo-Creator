@@ -1,16 +1,13 @@
-"""Local Remotion packaging with FFmpeg audio mixing and timed overlays."""
+"""Local HyperFrames alpha overlays and FFmpeg picture/audio composition."""
 
 from __future__ import annotations
 
 import json
 import math
 import os
-import queue
 import re
 import shutil
 import subprocess
-import threading
-import time
 import unicodedata
 from pathlib import Path
 
@@ -279,56 +276,34 @@ def _validate_pip(items, duration):
     return result
 
 
-def _run_remotion(root, request, duration, log, progress):
-    node = shutil.which("node")
-    if not node:
-        raise ValueError("未找到 Node.js，请完成工作台组件安装。")
-    env = os.environ.copy()
-    for candidate in [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe"]:
-        if Path(candidate).is_file():
-            env.setdefault("MPT_RENDER_BROWSER", candidate)
-            break
-    with log.open("w", encoding="utf-8") as error_log:
-        proc = subprocess.Popen([node, str(root / "render.mjs"), str(request)], cwd=root, stdout=subprocess.PIPE, stderr=error_log,
-                                text=True, encoding="utf-8", errors="replace", env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        lines = queue.Queue()
-        def read_lines():
-            try:
-                for line in proc.stdout:
-                    lines.put(line)
-            finally:
-                lines.put(None)
-        reader = threading.Thread(target=read_lines, daemon=True)
-        reader.start()
-        deadline = time.monotonic() + max(300, min(7200, duration * 20))
-        try:
-            while True:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("模板渲染超时，请缩短视频后重试。")
-                try:
-                    line = lines.get(timeout=2)
-                except queue.Empty:
-                    continue
-                if line is None:
-                    break
-                try:
-                    status = json.loads(line)
-                    if "progress" in status and progress:
-                        progress("正在渲染画面、标题与字幕", 20 + status["progress"] * 0.68)
-                except ValueError:
-                    pass
-            code = proc.wait(timeout=10)
-        finally:
-            if proc.poll() is None:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=15, creationflags=0x08000000)
-                else:
-                    proc.kill()
-                proc.wait(timeout=15)
-            reader.join(timeout=3)
-            proc.stdout.close()
-    if code:
-        raise RuntimeError("Remotion 渲染失败：" + log.read_text("utf-8", errors="replace")[-1000:])
+def _cached_render_browser():
+    configured_cache = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if configured_cache == "0":
+        return None
+    if configured_cache:
+        cache = Path(configured_cache).expanduser()
+    elif os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            return None
+        cache = Path(local) / "ms-playwright"
+    else:
+        cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "ms-playwright"
+    try:
+        candidates = [path for path in cache.glob("chromium_headless_shell-*/chrome-headless-shell-*/*")
+                      if path.name in {"chrome-headless-shell", "chrome-headless-shell.exe"} and path.is_file()]
+        return str(max(candidates, key=lambda path: path.stat().st_mtime).resolve()) if candidates else None
+    except OSError:
+        return None
+
+
+def _run_hyperframes(root, request, duration, log, progress):
+    from . import hyperframes
+    payload = json.loads(Path(request).read_text("utf-8"))
+    def report(message, percent=None):
+        if progress:
+            progress(message, 20 + max(0, min(100, float(percent or 0))) * 0.68)
+    return hyperframes.render_visual(payload, log, progress=report)
 
 
 def _mix_audio(visual, output, audio, bgm, duration, volume, log):
@@ -389,6 +364,12 @@ def render_video(video_path, audio_path=None, subtitle_path=None, title="", temp
     if audio_path and not audio["has_audio"]:
         raise ValueError("所选配音文件不包含音轨。")
     duration = audio["duration"] if audio_path else source["duration"]
+    from .composition import _video_timing
+    video_timing = _video_timing(source, extract.ffmpeg_binary())
+    tolerance = min(0.05, 1 / video_timing["fps"])
+    if duration > video_timing["duration"] + tolerance + 1e-6:
+        raise ValueError(f"人物视频画面只有 {video_timing['duration']:.1f} 秒，完整配音是 {duration:.1f} 秒。"
+                         "不能循环画面补齐；请用这份配音重新生成数字人，或改用人物＋图文。")
     bgm = probe_source(bgm_path) if bgm_path else None
     if bgm and not bgm["has_audio"]:
         raise ValueError("所选背景音乐不包含音轨。")
@@ -402,15 +383,17 @@ def render_video(video_path, audio_path=None, subtitle_path=None, title="", temp
         legacy_image = _validate_pip([{"path": image_path}], duration)[0]
         if legacy_image["kind"] != "image":
             raise ValueError("画中画模板背景需要一张图片。")
-    root = Path(__file__).resolve().parents[3] / "creator-renderer"
-    if not shutil.which("node") or not (root / "node_modules" / "@remotion" / "renderer").is_dir():
-        raise ValueError("Remotion 组件未就绪，请先完成工作台组件安装。")
+    root = Path(__file__).resolve().parents[3] / "creator-hyperframes"
+    if not shutil.which("node") or not (root / "node_modules" / "hyperframes").is_dir():
+        raise ValueError("HyperFrames 组件未就绪，请先完成工作台组件安装。")
     ident = store.new_id()
     folder = store.data_root() / "renders" / ident
     folder.mkdir(parents=True)
     output, visual, log = folder / "final.mp4", folder / "visual.mp4", folder / "render.log"
     base = {"title": str(title)[:120], "template": template, "style": style, "aspect": aspect, "duration": duration,
             "source_video_path": source["path"], "source_audio_path": audio["path"] if audio["has_audio"] else "",
+            "source_video_duration": video_timing["duration"],
+            "renderer": "hyperframes", "overlay_format": "alpha-auto",
             "audio_mode": "replacement" if audio_path else ("original" if audio["has_audio"] else "none"),
             "bgm_path": bgm["path"] if bgm else "", "bgm_volume": volume, "color_grade": color_grade, "subtitle_style": subtitle_style,
             "pip_items": items, "video_fit": video_fit, "log_path": str(log)}
@@ -437,15 +420,19 @@ def render_video(video_path, audio_path=None, subtitle_path=None, title="", temp
             base["source_subtitle_path"] = srt
             _write_captions(copied_srt, prepared)
             srt = str(copied_srt)
-        payload = {"video": source["path"], "videoFrames": max(1, math.ceil(source["duration"] * 30)), "image": legacy_image["path"] if legacy_image else None,
+        payload = {"video": source["path"], "videoFrames": max(1, math.ceil(video_timing["duration"] * 30)), "image": legacy_image["path"] if legacy_image else None,
                    "title": base["title"], "template": template, "style": style, "colorGrade": color_grade, "subtitleStyle": subtitle_style, "videoFit": video_fit,
                    "width": width, "height": height, "fps": 30, "durationInFrames": math.ceil(duration * 30), "captions": prepared,
                    "pipItems": items, "output": str(visual), "silent": True}
         request = folder / "request.json"
         request.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
         if progress:
-            progress("准备 Remotion 模板", 20)
-        _run_remotion(root, request, duration, log, progress)
+            progress("准备字幕与观点动画", 20)
+        render_metadata = _run_hyperframes(root, request, duration, log, progress)
+        if isinstance(render_metadata, dict):
+            for key in ("overlay_format", "renderer_version", "html_path", "report_path"):
+                if key in render_metadata:
+                    base[key] = render_metadata[key]
         if not visual.is_file():
             raise RuntimeError("模板没有生成视频，请查看渲染记录后重试。")
         if progress:

@@ -72,9 +72,7 @@ const WorkspaceVideo=(props)=>{
   return <AbsoluteFill style={{backgroundColor:style==='business'?'#161b22':'#10131b',fontFamily:'Microsoft YaHei, Noto Sans CJK SC, sans-serif',color:'white'}}>
     {legacyPip && <Img src={props.image} style={{width:'100%',height:'100%',objectFit:'cover'}}/>}
     <div style={legacyPip ? {position:'absolute',right:'5%',bottom:'22%',width:'38%',height:'35%',borderRadius:24,overflow:'hidden',border:'3px solid #ffffff',boxShadow:'0 8px 30px #0008'} : {position:'absolute',inset:card?'13% 5% 23%':0,overflow:'hidden',borderRadius:card?20:0}}>
-      <Loop durationInFrames={props.videoFrames || props.durationInFrames}>
-        <OffthreadVideo src={props.video} muted={Boolean(props.silent || props.audio)} style={{width:'100%',height:'100%',objectFit:props.videoFit || 'contain',filter:GRADES[props.colorGrade] || GRADES.none}}/>
-      </Loop>
+      <OffthreadVideo src={props.video} muted={Boolean(props.silent || props.audio)} style={{width:'100%',height:'100%',objectFit:props.videoFit || 'contain',filter:GRADES[props.colorGrade] || GRADES.none}}/>
     </div>
     {!props.silent && props.audio && <Audio src={props.audio}/>}
     {!props.silent && props.bgm && <Audio src={props.bgm} volume={props.bgmVolume ?? 0.12} loop/>}

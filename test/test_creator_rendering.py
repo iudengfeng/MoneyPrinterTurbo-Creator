@@ -57,7 +57,7 @@ class CreatorRenderingTest(unittest.TestCase):
         shutil.copy2(self.silent, payload['output'])
 
     def _render(self, **kwargs):
-        with patch.object(rendering, '_run_remotion', side_effect=self._render_stub):
+        with patch.object(rendering, '_run_hyperframes', side_effect=self._render_stub):
             return rendering.render_video(self.video, **kwargs)
 
     def _pcm(self, path):
@@ -107,6 +107,32 @@ class CreatorRenderingTest(unittest.TestCase):
         self.assertAlmostEqual(result['duration'], 2, places=1)
         self.assertAlmostEqual(rendering.probe_source(result['video_path'])['duration'], 2, places=1)
 
+    def test_short_main_video_rejects_long_audio_before_recognition_or_render(self):
+        audio = self.root / 'long.wav'
+        subprocess.run([self.ffmpeg, '-v', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i',
+                        'sine=frequency=700:duration=8:sample_rate=48000', str(audio)],
+                       check=True, capture_output=True, timeout=30)
+        original = self.video.read_bytes()
+        with patch.object(extract, 'extract_media') as recognition, patch.object(rendering, '_run_hyperframes') as render:
+            with self.assertRaisesRegex(ValueError, '不能循环画面'):
+                rendering.render_video(self.video, audio_path=audio, auto_subtitles=True)
+        recognition.assert_not_called()
+        render.assert_not_called()
+        self.assertEqual(self.video.read_bytes(), original)
+        self.assertEqual(store.list_records('renders'), [])
+
+    def test_long_container_audio_cannot_hide_short_video_track(self):
+        source = self.root / 'short-video-long-audio.mp4'
+        subprocess.run([self.ffmpeg, '-v', 'error', '-nostdin', '-y', '-i', str(self.video),
+                        '-f', 'lavfi', '-i', 'sine=frequency=700:duration=8:sample_rate=48000',
+                        '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', str(source)],
+                       check=True, capture_output=True, timeout=30)
+        self.assertGreater(rendering.probe_source(source)['duration'], 7)
+        with patch.object(rendering, '_run_hyperframes') as render:
+            with self.assertRaisesRegex(ValueError, '人物视频画面只有 3.0 秒'):
+                rendering.render_video(source)
+        render.assert_not_called()
+
     def test_music_fades_out_without_truncating_voice(self):
         result = self._render(bgm_path=self.music, bgm_volume=0.3)
         pcm = self._pcm(result['video_path'])
@@ -116,7 +142,7 @@ class CreatorRenderingTest(unittest.TestCase):
         self.assertGreater(self._tone(pcm, 440, start=2.75, duration=0.15), 0.09)
 
     def test_silent_video_can_get_music_or_remain_silent(self):
-        with patch.object(rendering, '_run_remotion', side_effect=self._render_stub):
+        with patch.object(rendering, '_run_hyperframes', side_effect=self._render_stub):
             music = rendering.render_video(self.silent, bgm_path=self.music)
             no_music = rendering.render_video(self.silent)
         self.assertTrue(rendering.probe_source(music['video_path'])['has_audio'])
@@ -136,7 +162,7 @@ class CreatorRenderingTest(unittest.TestCase):
     def test_subtitle_modes_cannot_duplicate_existing_burned_text(self):
         cases = [dict(auto_subtitles=True, subtitle_path=self.srt), dict(auto_subtitles=True, source_subtitles_burned=True),
                  dict(subtitle_path=self.srt, source_subtitles_burned=True), dict(subtitle_path=self.srt, subtitle_style='none')]
-        with patch.object(rendering, '_run_remotion') as render:
+        with patch.object(rendering, '_run_hyperframes') as render:
             for case in cases:
                 with self.subTest(case=case), self.assertRaises(ValueError):
                     rendering.render_video(self.video, **case)
@@ -152,7 +178,7 @@ class CreatorRenderingTest(unittest.TestCase):
     def test_failure_retains_prior_success_and_source_files(self):
         first = self._render()
         contents = Path(first['video_path']).read_bytes()
-        with patch.object(rendering, '_run_remotion', side_effect=RuntimeError('render stopped')):
+        with patch.object(rendering, '_run_hyperframes', side_effect=RuntimeError('render stopped')):
             with self.assertRaisesRegex(RuntimeError, 'render stopped'):
                 rendering.render_video(self.video, style='bold')
         self.assertEqual(Path(first['video_path']).read_bytes(), contents)
@@ -266,7 +292,7 @@ class CreatorRenderingTest(unittest.TestCase):
             payload = json.loads((Path(row['video_path']).parent/'request.json').read_text('utf-8'))
             self.assertEqual(payload['videoFit'], expected)
             self.assertEqual(row['video_fit'], expected)
-        with patch.object(rendering, '_run_remotion') as renderer:
+        with patch.object(rendering, '_run_hyperframes') as renderer:
             with self.assertRaisesRegex(ValueError, '适配'):
                 rendering.render_video(self.video, video_fit='stretch')
         renderer.assert_not_called()

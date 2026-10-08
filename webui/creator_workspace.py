@@ -8,6 +8,26 @@ import streamlit as st
 from app.services.creator import jobs, store
 
 
+CATEGORIES = {
+    "script": "① 选题与文案", "audio": "② 配音与字幕", "visuals": "③ 素材与画面",
+    "render": "④ 字幕包装与成片", "publish": "⑤ 封面与发布",
+}
+CATEGORY_PAGES = {
+    "script": ("创作中心", "选题和文案", "口播参考库", "账号选题", "作品库", "客户／品牌档案"),
+    "audio": ("配音", "文案提取", "声音与数字人"),
+    "visuals": ("数字人", "素材与分镜"),
+    "render": ("模板剪辑",),
+    "publish": ("标题和封面", "发布中心"),
+}
+PAGE_LABELS = {
+    "创作中心": "一键创作", "选题和文案": "选题与文案", "口播参考库": "口播参考库", "账号选题": "账号定位与选题",
+    "作品库": "作品库", "客户／品牌档案": "客户／品牌档案", "配音": "配音", "文案提取": "字幕与文案提取",
+    "声音与数字人": "声音管理", "数字人": "我的数字人", "素材与分镜": "素材与分镜", "模板剪辑": "字幕包装与成片",
+    "标题和封面": "封面与标题", "发布中心": "发布",
+}
+PAGE_CATEGORY = {page: category for category, pages in CATEGORY_PAGES.items() for page in pages}
+
+
 def _stage(upload):
     data = upload.getvalue()
     suffix = Path(upload.name).suffix.lower()
@@ -101,7 +121,7 @@ def _extract():
                 if row.get("txt_path"):
                     Path(row["txt_path"]).write_text(text,"utf-8")
                 st.success("文案已保存。")
-            right.button("送到视频制作",key="creator_use_"+row["id"],on_click=_use_script,args=(text,))
+            right.button("送到速片工厂",key="creator_use_"+row["id"],on_click=_use_script,args=(text,))
             st.download_button("下载文案",text,file_name="口播文案.txt",key="creator_txt_"+row["id"])
             if row.get("srt_path") and Path(row["srt_path"]).is_file():
                 st.download_button("下载原视频字幕",Path(row["srt_path"]).read_bytes(),file_name="参考字幕.srt",key="creator_srt_"+row["id"])
@@ -150,7 +170,7 @@ def _topics():
                 if st.button("保存稿件",key="creator_script_save_"+topic["id"]):
                     store.update_record("topics",topic["id"],{"script":script})
                     st.success("稿件已保存。")
-                st.button("送到视频制作",key="creator_topic_use_"+topic["id"],on_click=_use_script,args=(script,))
+                st.button("送到速片工厂",key="creator_topic_use_"+topic["id"],on_click=_use_script,args=(script,))
 
 
 def _voices():
@@ -200,23 +220,6 @@ def _voices():
                 _submit("声音试听 · "+selected_voice["name"],preview)
         else:
             st.info("保存第一个声音档案后，就可以生成配音。")
-    st.divider()
-    st.write("数字人口播")
-    try:
-        profiles=duix.list_profiles()
-        if not profiles["models"] or not profiles["voices"]:
-            st.info("请先在 Duix 中创建数字人和音色。")
-            return
-        c1,c2=st.columns(2)
-        model=c1.selectbox("选择数字人",profiles["models"],format_func=lambda a:a["name"])
-        voice=c2.selectbox("选择本机音色",profiles["voices"],format_func=lambda a:a["name"])
-        script=st.text_area("数字人口播文案",key="creator_duix_script",height=160)
-        aspect=st.selectbox("数字人画幅",["9:16","16:9"],format_func=lambda a:"竖屏" if a=="9:16" else "横屏")
-        if st.button("生成数字人口播",type="primary",key="creator_avatar_start"):
-            _submit("数字人口播",duix.generate,script,model["id"],voice["id"],aspect=aspect)
-        st.caption("复用本机 Duix 和现有融合任务队列，分阶段使用显存。")
-    except Exception as exc:
-        st.warning(str(exc))
 
 
 def _rendering():
@@ -247,7 +250,7 @@ def _tasks():
             if isinstance(result,dict):
                 if result.get("text"):
                     st.text_area("生成文案",value=result["text"],key="creator_jobtext_"+row["id"],height=160)
-                    st.button("送到视频制作",key="creator_job_use_"+row["id"],on_click=_use_script,args=(result["text"],))
+                    st.button("送到速片工厂",key="creator_job_use_"+row["id"],on_click=_use_script,args=(result["text"],))
                 if result.get("audio_path") and Path(result["audio_path"]).is_file():
                     st.audio(result["audio_path"])
                     if result.get("preview"):
@@ -267,20 +270,108 @@ def _tasks():
         st.rerun(scope="app")
 
 
+def _select_workspace(tab):
+    st.session_state["creator_selected_tab"] = tab
+    st.session_state["creator_navigation_target"] = tab
+    st.session_state["creator_navigation_pending"] = True
+
+
+def _category_changed():
+    category = st.session_state["creator_category"]
+    _select_workspace(CATEGORY_PAGES[category][0])
+
+
+def _subpage_changed():
+    _select_workspace(st.session_state["creator_selected_tab"])
+
+
+def _sync_navigation():
+    """Resolve old handoff routes before creating either navigation widget."""
+    pending = st.session_state.pop("creator_navigation_target", None)
+    selected = pending if pending is not None else st.session_state.get("creator_selected_tab", "创作中心")
+    category = st.session_state.get("creator_category")
+    if category not in CATEGORIES:
+        category = next((key for key, label in CATEGORIES.items() if label == category), None)
+    previous_category = st.session_state.get("creator_last_rendered_category") or PAGE_CATEGORY.get(
+        st.session_state.get("creator_last_rendered_page"))
+    if pending is None and category in CATEGORIES and previous_category and category != previous_category:
+        # Automatic task fragments can consume a changed widget state before
+        # its full-page callback is processed. A changed category remains a
+        # navigation request even when there is no callback handoff marker.
+        selected = CATEGORY_PAGES[category][0]
+    project_query = str(st.query_params.get("project", ""))
+    if pending is None and project_query and project_query != st.session_state.get("creator_project_query"):
+        # An external deep link opens the saved work. Internal Studio picking
+        # and saving already carry their own pending marker and retain the
+        # current tool (including the material stage in category three).
+        if st.session_state.get("studio_pending_project") != project_query:
+            selected = "创作中心"
+            st.session_state["studio_pending_project"] = project_query
+    st.session_state["creator_project_query"] = project_query
+    if selected == "竞品素材库":
+        selected = "口播参考库"
+    if selected not in PAGE_CATEGORY:
+        # A late fragment may carry the previous category's formatted local
+        # option. Keep the current category instead of resetting the sidebar.
+        visible_page = next((page for page, label in PAGE_LABELS.items() if label == selected), None)
+        if visible_page and (category is None or PAGE_CATEGORY[visible_page] == category):
+            selected = visible_page
+        else:
+            previous_page = st.session_state.get("creator_last_rendered_page")
+            selected = previous_page if previous_page in PAGE_CATEGORY and PAGE_CATEGORY[previous_page] == category else CATEGORY_PAGES.get(
+                category, CATEGORY_PAGES["script"])[0]
+    active_category = PAGE_CATEGORY[selected]
+    if st.session_state.get("creator_selected_tab") != selected:
+        st.session_state["creator_selected_tab"] = selected
+    if st.session_state.get("creator_category") != active_category:
+        st.session_state["creator_category"] = active_category
+    if selected == "素材与分镜" and st.session_state.get("creator_last_rendered_page") != selected:
+        st.session_state["studio_mode"] = "分步制作"
+        st.session_state["studio_step"] = "visuals"
+    st.session_state["creator_last_rendered_page"] = selected
+    st.session_state["creator_last_rendered_category"] = active_category
+    return selected
+
+
 def render():
+    from app.services.creator import competitors
+    competitors.ensure_scheduler()
+    selected = _sync_navigation()
     st.markdown('<style>'+Path(__file__).with_name("creator_styles.css").read_text("utf-8")+'</style>',unsafe_allow_html=True)
-    st.markdown('<div class="creator-shell"><strong>创作工作台</strong><span> / 从选题开始，把想法做成作品</span></div>',unsafe_allow_html=True)
-    st.sidebar.caption("创作流程")
-    selected=st.sidebar.radio("工作步骤",["选题和文案","配音","数字人","模板剪辑","标题和封面","发布中心","文案提取","账号选题","声音与数字人"],key="creator_selected_tab",label_visibility="collapsed")
-    if selected=="选题和文案":
+    st.markdown('<div class="creator-shell"><strong>数字人口播</strong><span> / 从选题到发布，按五步完成作品</span></div>',unsafe_allow_html=True)
+    with st.sidebar.container(key="creator_navigation"):
+        st.markdown('<div class="creator-navigation-label">制作流程</div>', unsafe_allow_html=True)
+        category = st.radio("制作流程", list(CATEGORIES), format_func=CATEGORIES.get, key="creator_category",
+                            on_change=_category_changed, label_visibility="collapsed", persist_state="session")
+    pages = CATEGORY_PAGES[category]
+    if len(pages) > 1:
+        with st.container(key="creator_local_navigation"):
+            selected = st.radio("本步工具", list(pages), format_func=PAGE_LABELS.get, key="creator_selected_tab", horizontal=True,
+                                on_change=_subpage_changed, label_visibility="collapsed", persist_state="session")
+    if selected=="创作中心":
+        from webui.creator_studio_workspace import render as render_studio
+        render_studio()
+    elif selected=="作品库":
+        from webui.creator_studio_workspace import render_library
+        render_library()
+    elif selected=="客户／品牌档案":
+        from webui.creator_brand_workspace import render as render_brands
+        render_brands()
+    elif selected=="选题和文案":
         from webui.creator_script_workspace import render as render_scripts
         render_scripts()
+    elif selected=="口播参考库":
+        from webui.creator_competitor_workspace import render as render_competitors
+        render_competitors()
     elif selected=="配音":
         from webui.creator_voice_workspace import render as render_voice
         render_voice()
     elif selected=="数字人":
         from webui.creator_avatar_workspace import render as render_avatar
         render_avatar()
+    elif selected=="素材与分镜":
+        from webui.creator_studio_workspace import render as render_studio
+        render_studio()
     elif selected=="模板剪辑":
         _rendering()
     elif selected=="标题和封面":
@@ -289,8 +380,8 @@ def render():
     elif selected=="发布中心":
         _publishing()
     else:
-        st.subheader(selected)
+        st.subheader(PAGE_LABELS.get(selected, selected))
         {"文案提取":_extract,"账号选题":_topics,"声音与数字人":_voices,"模板剪辑":_rendering,"发布中心":_publishing}[selected]()
     st.divider()
-    with st.expander("任务中心",expanded=selected not in {"选题和文案","配音","数字人","模板剪辑","标题和封面","发布中心"}):
+    with st.expander("任务中心",expanded=selected not in {"创作中心","作品库","客户／品牌档案","选题和文案","口播参考库","配音","数字人","模板剪辑","标题和封面","发布中心"}):
         _tasks()

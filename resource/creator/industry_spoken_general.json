@@ -1,0 +1,20 @@
+{
+  "industry_id": "spoken_general",
+  "industry_name": "通用口播视频素材",
+  "category": "行业不限",
+  "video_type": "spoken_content",
+  "scraping_rule": {
+    "content_formats": ["口播", "探店", "测评", "教程", "避坑", "攻略", "经验分享", "本地生活讲解"],
+    "exclude_formats": ["纯图片轮播", "带货挂车无口播", "无口播展示", "BGM展示", "招商加盟", "纯特效展示"],
+    "min_text_length": 80,
+    "prefer_high_comment": true
+  },
+  "keyword_pool": {"must_include": [], "exclude": [], "long_tail": ["怎么选", "攻略", "避坑", "测评", "经验分享"]},
+  "content_sources": [],
+  "extract_fields": {
+    "base_fields": ["title", "hook_3s", "spoken_script", "bullet_points", "material_clues", "tags"],
+    "industry_extra_fields": {"price": "原文明确价格", "location": "原文明确地址", "duration": "原文明确时长或有效期"}
+  },
+  "update_policy": {"enabled": false, "interval_hours": 24, "items_per_time": 30},
+  "library_config": {"storage": "creator.sqlite3", "split_by_sub_category": false}
+}

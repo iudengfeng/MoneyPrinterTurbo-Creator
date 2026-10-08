@@ -68,11 +68,16 @@ def _use_video(row):
     st.session_state["creator_navigation_pending"] = True
 
 
-def _submit(option, audio, script, aspect):
+def _submit(option, audio, script, aspect, mode="mixed", allow_reference_reuse=False):
     try:
-        ident = jobs.submit("数字人口播 · " + option["name"], avatar.generate,
-            audio["audio_path"], option["id"], script=script, aspect=aspect,
-            source_narration_id=audio.get("id", ""))
+        kwargs = {"script": script, "aspect": aspect, "source_narration_id": audio.get("id", "")}
+        if mode == "mixed":
+            from app.services.creator.avatar_mixed_generation import generate
+        else:
+            generate = avatar.generate
+            if allow_reference_reuse:
+                kwargs["allow_reference_reuse"] = True
+        ident = jobs.submit("数字人口播 · " + option["name"], generate, audio["audio_path"], option["id"], **kwargs)
         st.session_state["creator_avatar_pending"] = {"id": ident, "action": "generate"}
         st.session_state["creator_last_job"] = ident
     except Exception as exc:
@@ -245,6 +250,16 @@ def render():
         with st.container(border=True, key="creator_avatar_settings"):
             st.markdown("**生成设置**")
             aspect = st.radio("画面比例", ["9:16", "16:9"], format_func=lambda value: "竖屏 9:16" if value == "9:16" else "横屏 16:9", horizontal=True, key="creator_avatar_aspect", disabled=busy, persist_state="session")
+            mode = st.radio("视频形式", ["mixed", "full"],
+                            format_func=lambda value: "人物＋图文（推荐）" if value == "mixed" else "全程人物",
+                            key="creator_avatar_mode", horizontal=True, disabled=busy, persist_state="session")
+            reuse = False
+            if mode == "mixed":
+                st.caption("分散安排人物镜头，其余时间用文案信息卡衔接，保留完整口播，避免动作循环。")
+            else:
+                with st.expander("人物动作素材不足时"):
+                    reuse = st.checkbox("允许在完整人物模板用完后复用动作", key="creator_avatar_allow_reuse", disabled=busy, persist_state="session")
+                    st.caption("默认不循环；人物参考视频短于配音时，请改用人物＋图文或上传更长的形象。")
             st.caption("保留配音中的自然停顿。剪辑气口和人物美颜尚未接入。")
             if not state.get("available"):
                 st.warning(state.get("reason") or "本机数字人服务尚未就绪。人物素材和配音可以先保存，服务就绪后再生成。")
@@ -257,7 +272,7 @@ def render():
             if option and not model_ready:
                 st.warning(option.get("reason") or "所选人物素材暂不可用，请重新上传视频。")
             if st.button("生成口播视频", type="primary", key="creator_avatar_start", width="stretch", disabled=busy or not state.get("available") or not model_ready or not audio or not confirmed):
-                _submit(option, audio, script, aspect)
+                _submit(option, audio, script, aspect, mode, reuse)
                 st.rerun()
             if audio and not confirmed:
                 st.caption("请先试听，并确认使用这份配音。")

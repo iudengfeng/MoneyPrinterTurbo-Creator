@@ -11,6 +11,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from app.services.creator import jobs, narration, store, topics
+from webui import creator_workspace
 
 
 class VoiceWorkspaceTests(unittest.TestCase):
@@ -41,6 +42,14 @@ class VoiceWorkspaceTests(unittest.TestCase):
 
     def button(self, app, label):
         return next(item for item in app.button if item.label == label)
+
+    def go(self, app, page):
+        category = creator_workspace.PAGE_CATEGORY[page]
+        if app.radio(key="creator_category").value != category:
+            app.radio(key="creator_category").set_value(category).run()
+        if len(creator_workspace.CATEGORY_PAGES[category]) > 1:
+            app.radio(key="creator_selected_tab").set_value(page).run()
+        self.assertFalse(app.exception)
 
     def collect_pending(self, app):
         deadline = time.monotonic() + 10
@@ -176,6 +185,7 @@ class VoiceWorkspaceTests(unittest.TestCase):
 
     def test_first_step_confirmation_navigates_to_voice_with_exact_script(self):
         app = self.app(integrated=True)
+        self.go(app, "选题和文案")
         self.assertEqual(app.radio(key="creator_selected_tab").value, "选题和文案")
         self.button(app, "直接写文案").click().run()
         text = "这一段是第一步确认的完整文案。下一步配音页面应该接收到完全相同的文字，稿件也应保存到我的文案。"
@@ -191,15 +201,15 @@ class VoiceWorkspaceTests(unittest.TestCase):
 
     def test_navigation_away_and_back_retains_edited_voice_script(self):
         app = self.app(integrated=True)
-        app.radio(key="creator_selected_tab").set_value("配音").run()
+        self.go(app, "配音")
         original = "这一篇配音稿即使切换到选题页，再返回配音页，也必须完整保留。"
         edited = original + "这句是在配音页新增的修改，尚未生成音频。"
         app.text_area(key="creator_voice_text").set_value(edited).run()
         self.assertEqual(app.session_state["creator_voice_draft"], edited)
-        app.radio(key="creator_selected_tab").set_value("选题和文案").run()
+        self.go(app, "选题和文案")
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["creator_voice_draft"], edited)
-        app.radio(key="creator_selected_tab").set_value("配音").run()
+        self.go(app, "配音")
         self.assertFalse(app.exception)
         self.assertEqual(app.text_area(key="creator_voice_text").value, edited)
         self.assertEqual(app.session_state["creator_voice_draft"], edited)
@@ -208,23 +218,26 @@ class VoiceWorkspaceTests(unittest.TestCase):
     def test_complete_narration_handoff_keeps_audio_and_requires_avatar_confirmation(self):
         text = "这一条完整配音应原样交给数字人，不应重复合成或自动跳过试听确认。"
         formal = self.generation(text, self.options[0]["id"])
-        app = self.app()
+        app = self.app(integrated=True)
+        self.go(app, "配音")
         app.session_state["creator_narration_result"] = formal
         app.run()
         self.button(app, "确认配音，下一步数字人 →").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["creator_selected_tab"], "数字人")
+        self.assertEqual(app.radio(key="creator_category").value, "visuals")
         self.assertEqual(app.session_state["creator_avatar_audio_source"], "本次完整配音")
         self.assertEqual(app.session_state["creator_narration_result"]["audio_path"], formal["audio_path"])
         self.assertEqual(app.session_state["creator_narration_result"]["text"], text)
-        self.assertNotIn("creator_avatar_audio_confirmed", app.session_state)
+        self.assertFalse(app.checkbox(key="creator_avatar_audio_confirmed").value)
+        self.assertTrue(app.button(key="creator_avatar_start").disabled)
         self.provider.assert_not_called()
 
     def test_preview_keeps_complete_narration_and_has_no_editing_handoff(self):
         complete_text = "完整的配音包含所有内容，试听只用于比较声音，不应替换正式成品。" * 5
         formal = self.generation(complete_text, self.options[0]["id"])
         app = self.app(integrated=True)
-        app.radio(key="creator_selected_tab").set_value("配音").run()
+        self.go(app, "配音")
         app.session_state["creator_narration_result"] = formal
         app.run()
         app.text_area(key="creator_voice_text").set_value(complete_text).run()

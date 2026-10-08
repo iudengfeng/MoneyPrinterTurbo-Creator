@@ -42,7 +42,11 @@ try {
   for(const name of ['video','audio','bgm','image']) props[name]=routeFile(name,props[name]);
   props.pipItems=(props.pipItems || []).map((item,index)=>({...item,path:routeFile(`pip-${index}`,item.path)}));
   const serveUrl=await bundle({entryPoint:path.join(base,'src/index.jsx'),outDir:bundleDir});
-  const options={serveUrl,inputProps:props,browserExecutable:process.env.MPT_RENDER_BROWSER || undefined};
+  const browserExecutable=process.env.MPT_RENDER_BROWSER || undefined;
+  // Regular Edge/Chrome use the current headless mode. Remotion's default
+  // headless-shell mode passes --headless=old, which these browsers removed.
+  const chromeMode=browserExecutable && !path.basename(browserExecutable).includes('headless') ? 'chrome-for-testing' : 'headless-shell';
+  const options={serveUrl,inputProps:props,browserExecutable,chromeMode};
   const composition=await selectComposition({...options,id:'CreatorVideo'});
   let reportedProgress=-1;
   await renderMedia({...options,composition,codec:'h264',outputLocation:request.output,concurrency:2,x264Preset:'veryfast',crf:20,overwrite:false,muted:Boolean(request.silent),offthreadVideoCacheSizeInBytes:256*1024*1024,mediaCacheSizeInBytes:256*1024*1024,onProgress:({progress})=>{const percent=Math.round(progress*100);if(percent!==reportedProgress){reportedProgress=percent;process.stdout.write(JSON.stringify({progress:percent})+'\n');}}});

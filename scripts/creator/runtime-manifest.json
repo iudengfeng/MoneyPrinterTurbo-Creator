@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "platform": "windows-x86_64",
+  "python": {
+    "version": "3.11.17",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17%2B20261003-x86_64-pc-windows-msvc-install_only.tar.gz",
+    "sha256": "0f7defa7a0ed99b61e0df0bba5027474711521f1307cc3830c2f456401beeed5",
+    "archive_root": "python",
+    "source": "https://github.com/astral-sh/python-build-standalone/releases/tag/20261003"
+  },
+  "node": {
+    "version": "24.21.0",
+    "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+    "sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+    "archive_root": "node-v24.21.0-win-x64",
+    "source": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt"
+  },
+  "ffmpeg": {
+    "version": "8.1.2",
+    "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+    "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+    "archive_root": "ffmpeg-8.1.2-essentials_build",
+    "source": "https://github.com/GyanD/codexffmpeg/releases/tag/8.1.2",
+    "license": "GPL-3.0-or-later; downloaded on the user's computer, not included in the source package"
+  },
+  "pip": {
+    "version": "26.1.2",
+    "url": "https://files.pythonhosted.org/packages/5d/95/6b5cb3461ea5673ba0995989746db58eb18b91b54dbf331e72f569540946/pip-26.1.2-py3-none-any.whl",
+    "sha256": "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab",
+    "source": "https://pypi.org/pypi/pip/26.1.2/json"
+  },
+  "scrapling": "scrapling[fetchers]==0.4.15",
+  "font": {
+    "name": "Noto Sans SC",
+    "url": "https://raw.githubusercontent.com/google/fonts/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+    "license": "SIL Open Font License 1.1"
+  },
+  "font_license": {
+    "url": "https://raw.githubusercontent.com/google/fonts/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc/OFL.txt",
+    "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"
+  }
+}

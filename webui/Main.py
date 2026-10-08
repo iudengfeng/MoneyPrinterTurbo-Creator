@@ -191,7 +191,7 @@ LOOMLOOM_VIDEO_MODEL_PRICES = (
 )
 DEFAULT_SUBTITLE_SETTINGS = {
     "subtitle_enabled": True,
-    "font_name": "MicrosoftYaHeiBold.ttc",
+    "font_name": "NotoSansSC.ttf",
     "subtitle_position": "bottom",
     "subtitle_display_mode": "sentence",
     "subtitle_animation": "none",
@@ -6595,7 +6595,7 @@ def _render_background_music_settings(params, elevenlabs_api_key_rendered=False)
         default_value=_saved_ui_choice(
             "bgm_type",
             [value for _, value in bgm_options],
-            "random",
+            "",
         ),
         key="bgm_type_select",
         format_func=lambda value: dict((v, label) for label, v in bgm_options)[value],
@@ -7606,9 +7606,12 @@ def _render_subtitle_settings(panel, params):
             _set_runtime_config("ui", "subtitle_enabled", params.subtitle_enabled)
             subtitle_settings_disabled = not params.subtitle_enabled
             font_names = get_all_fonts()
-            saved_font_name = config.ui.get(
+            saved_font_name = utils.subtitle_font_name(config.ui.get(
                 "font_name", DEFAULT_SUBTITLE_SETTINGS["font_name"]
-            )
+            ), directory=font_dir)
+            if saved_font_name not in font_names:
+                st.warning("之前选择的字幕字体文件缺失，请重新选择或补回字体文件。")
+                font_names = [saved_font_name, *font_names]
             saved_font_name_index = 0
             if saved_font_name in font_names:
                 saved_font_name_index = font_names.index(saved_font_name)
@@ -8413,13 +8416,16 @@ def _render_application():
 st.session_state.pop("creator_navigation_pending", None)
 if "creator_route" not in st.session_state:
     st.session_state["creator_route"] = "创作工作台" if st.query_params.get("workspace") == "creator" else "视频制作"
-st.sidebar.radio("功能", ["视频制作", "创作工作台"], key="creator_route")
 if st.session_state["creator_route"] == "创作工作台":
-    _render_top_bar()
+    if st.query_params.get("workspace") != "creator":
+        st.query_params["workspace"] = "creator"
+    from webui.creator_reference_workspace import render as render_creator_workspace
+    render_creator_workspace(settings_callback=_open_settings_dialog)
     if st.session_state.get("settings_dialog_open", False):
         _render_settings_dialog()
-    from webui.creator_workspace import render as render_creator_workspace
-    render_creator_workspace()
     _save_runtime_config()
 else:
+    st.sidebar.radio("功能", ["视频制作", "创作工作台"], key="creator_route",
+                     format_func=lambda value: "速片工厂" if value == "视频制作" else "数字人口播",
+                     persist_state="session")
     _render_application()

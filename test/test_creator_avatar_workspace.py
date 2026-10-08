@@ -27,8 +27,9 @@ class AvatarWorkspaceTests(unittest.TestCase):
             patch("app.services.creator.avatar.status", return_value={"available": True, "reason": ""}),
             patch("app.services.creator.avatar.generate", side_effect=AssertionError("Unexpected avatar request")),
             patch("app.services.creator.avatar.list_jobs", side_effect=lambda: store.list_records("avatar_jobs")),
+            patch("app.services.creator.avatar_mixed_generation.generate", side_effect=AssertionError("Unexpected mixed avatar request")),
         ]
-        self.options_mock, self.status_mock, self.provider, self.history_mock = [item.start() for item in self.patchers]
+        self.options_mock, self.status_mock, self.provider, self.history_mock, self.mixed_provider = [item.start() for item in self.patchers]
 
     def tearDown(self):
         for item in reversed(self.patchers):
@@ -107,6 +108,7 @@ class AvatarWorkspaceTests(unittest.TestCase):
     def test_current_complete_audio_requires_confirmation_and_reaches_job_unchanged(self):
         row = self.narration("完整文案、声音和语速由第二步的这份配音决定。")
         app = self.app(row, row["text"])
+        app.radio(key="creator_avatar_mode").set_value("full").run()
         self.assertEqual(self.original(app).value, row["text"])
         self.assertTrue(self.original(app).disabled)
         self.assertTrue(self.button(app, "生成口播视频").disabled)
@@ -198,6 +200,7 @@ class AvatarWorkspaceTests(unittest.TestCase):
         row = self.narration()
         previous = self.generation(row["audio_path"], "local:person", script="先前成功成品")
         app = self.app(row)
+        app.radio(key="creator_avatar_mode").set_value("full").run()
         app.session_state["creator_avatar_result"] = previous
         app.run()
         app.checkbox(key="creator_avatar_audio_confirmed").check().run()
@@ -208,6 +211,20 @@ class AvatarWorkspaceTests(unittest.TestCase):
         self.assertTrue(Path(previous["video_path"]).is_file())
         self.assertTrue(any("暂时不可用" in item.value for item in app.error))
         self.assertEqual(self.original(app).value, row["text"])
+
+    def test_mixed_mode_is_default_and_preserves_original_full_audio_version(self):
+        row = self.narration("全文声音和语速保持原样，人物镜头穿插在图文中。")
+        app = self.app(row)
+        self.assertEqual(app.radio(key="creator_avatar_mode").value, "mixed")
+        app.checkbox(key="creator_avatar_audio_confirmed").check().run()
+        with patch("app.services.creator.avatar_mixed_generation.generate", side_effect=self.generation) as mixed:
+            self.button(app, "生成口播视频").click().run()
+            self.collect_pending(app)
+            mixed.assert_called_once()
+            self.assertEqual(mixed.call_args.args, (row["audio_path"], "local:person"))
+            self.assertEqual(mixed.call_args.kwargs["source_narration_id"], row["id"])
+        self.provider.assert_not_called()
+        self.assertEqual(app.session_state["creator_avatar_result"]["duration"], 1.0)
 
     def test_editing_handoff_keeps_synced_video_and_clears_stale_audio_and_subtitle(self):
         row = self.narration()

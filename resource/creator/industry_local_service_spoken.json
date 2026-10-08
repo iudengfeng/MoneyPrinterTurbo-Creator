@@ -1,0 +1,20 @@
+{
+  "industry_id": "local_service_spoken",
+  "industry_name": "本地服务口播",
+  "category": "本地服务",
+  "video_type": "spoken_content",
+  "scraping_rule": {
+    "content_formats": ["口播", "教程", "避坑", "攻略", "经验分享", "本地生活讲解"],
+    "exclude_formats": ["纯商家宣传", "招商加盟"],
+    "min_text_length": 80,
+    "prefer_high_comment": true
+  },
+  "keyword_pool": {"must_include": ["服务", "上门", "怎么选", "避坑", "体验", "建议", "价格"], "exclude": ["招商加盟"], "long_tail": ["同城", "上门", "靠谱", "性价比"]},
+  "content_sources": [],
+  "extract_fields": {
+    "base_fields": ["title", "hook_3s", "spoken_script", "bullet_points", "material_clues", "tags"],
+    "industry_extra_fields": {"project": "服务项目", "price": "价格", "service_scope": "上门范围", "duration": "服务时长"}
+  },
+  "update_policy": {"enabled": false, "interval_hours": 24, "items_per_time": 30},
+  "library_config": {"storage": "creator.sqlite3", "split_by_sub_category": false}
+}

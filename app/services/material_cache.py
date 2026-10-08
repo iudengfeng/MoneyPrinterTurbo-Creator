@@ -452,7 +452,14 @@ def cleanup_expired_material_search_cache(
             try:
                 if not entry.is_file(follow_symlinks=False):
                     continue
-                expected = entry.stat(follow_symlinks=False)
+                # DirEntry.stat omits the Windows device/inode identity. Use
+                # the same syscall as _is_same_cache_file without following
+                # links, retaining replacement protection on both platforms.
+                expected = (
+                    os.stat(entry.path, follow_symlinks=False)
+                    if os.name == "nt"
+                    else entry.stat(follow_symlinks=False)
+                )
                 cache_age = current_time - expected.st_mtime
                 if _CACHE_TEMP_FILE_PATTERN.fullmatch(entry.name):
                     # An active write may look future-dated after a clock

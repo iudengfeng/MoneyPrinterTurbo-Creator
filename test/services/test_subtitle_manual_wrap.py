@@ -10,7 +10,7 @@ from app.utils import utils
 
 @pytest.mark.parametrize("text", ["SAFE TEXT\nMORE SAFE", "hello world\nwide text here"])
 def test_manual_subtitle_lines_fit_without_rewrapping(text):
-    font_path = str(Path(utils.font_dir()) / "MicrosoftYaHeiBold.ttc")
+    font_path = str(Path(utils.font_dir()) / "NotoSansSC.ttf")
     font = ImageFont.truetype(font_path, 60)
     width = max(font.getbbox(line)[2] - font.getbbox(line)[0] for line in text.split("\n"))
     wrapped, height = video.wrap_text(text, width, font=font_path, fontsize=60)
@@ -22,7 +22,7 @@ def test_manual_subtitle_lines_fit_without_rewrapping(text):
 
 
 def test_long_manual_line_wraps_without_splitting_the_next_line():
-    font_path = str(Path(utils.font_dir()) / "MicrosoftYaHeiBold.ttc")
+    font_path = str(Path(utils.font_dir()) / "NotoSansSC.ttf")
     font = ImageFont.truetype(font_path, 60)
     text = "hello world and more words\nSAFE TEXT"
     width = font.getbbox("SAFE TEXT")[2]

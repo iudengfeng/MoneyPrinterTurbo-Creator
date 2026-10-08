@@ -26,6 +26,9 @@ export function validateAction(action, snapshot, task, flags) {
   if (!allowed.has(action.action)) throw new Error('不支持的浏览器动作');
   if (['click', 'fill', 'submit'].includes(action.action)) {
     const line = referenceLine(snapshot, action.ref);
+    if (action.action === 'click' && /数据中心|数据总览|数据分析|作品数据|数据详情|经营数据|评论管理|评论中心|互动管理|粉丝管理/.test(line)) {
+      throw new Error('发布流程不进入表现数据或评论运营页面');
+    }
     if (action.action === 'click' && /发布|提交|删除|推广|充值|支付|授权|购买/.test(line)) {
       throw new Error('发布按钮必须使用 submit 动作，其余敏感操作禁止');
     }

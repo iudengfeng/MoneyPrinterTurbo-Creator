@@ -14,6 +14,22 @@ from loguru import logger
 
 from app.models import const
 
+DEFAULT_SUBTITLE_FONT = "NotoSansSC.ttf"
+_LEGACY_BUNDLED_FONTS = {"STHeitiMedium.ttc", "STHeitiLight.ttc", "MicrosoftYaHeiBold.ttc",
+                         "MicrosoftYaHeiNormal.ttc", "BeVietnamPro-Bold.ttf", "BeVietnamPro-Medium.ttf",
+                         "Charm-Regular.ttf", "Charm-Bold.ttf", "UTM Kabel KT.ttf"}
+
+
+def subtitle_font_name(name=None, *, directory=None):
+    """Migrate absent former bundled defaults, preserving real customer fonts."""
+    candidate = str(name or "").strip() or DEFAULT_SUBTITLE_FONT
+    root = Path(directory or resource_dir("fonts"))
+    if (candidate in _LEGACY_BUNDLED_FONTS and not (root / candidate).is_file()
+            and (root / DEFAULT_SUBTITLE_FONT).is_file()):
+        logger.warning(f"旧内置字幕字体 {candidate} 未随新版提供，使用 Noto Sans SC；已有自定义字体保持原选择。")
+        return DEFAULT_SUBTITLE_FONT
+    return candidate
+
 
 def get_response(status: int, data: Any = None, message: str = ""):
     obj = {

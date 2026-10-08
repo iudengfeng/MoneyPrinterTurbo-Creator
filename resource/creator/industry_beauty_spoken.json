@@ -1,0 +1,20 @@
+{
+  "industry_id": "beauty_spoken",
+  "industry_name": "美业口播",
+  "category": "美业",
+  "video_type": "spoken_content",
+  "scraping_rule": {
+    "content_formats": ["口播", "测评", "教程", "避坑", "攻略", "经验分享"],
+    "exclude_formats": ["纯效果对比图", "纯展示视频", "招商加盟"],
+    "min_text_length": 80,
+    "prefer_high_comment": true
+  },
+  "keyword_pool": {"must_include": ["美甲", "美睫", "护肤", "美容", "项目", "体验", "避坑"], "exclude": ["招商加盟"], "long_tail": ["单次体验", "性价比", "同城", "怎么选"]},
+  "content_sources": [],
+  "extract_fields": {
+    "base_fields": ["title", "hook_3s", "spoken_script", "bullet_points", "material_clues", "tags"],
+    "industry_extra_fields": {"project": "项目", "price": "价格", "duration": "时长", "effect": "原文明示效果"}
+  },
+  "update_policy": {"enabled": false, "interval_hours": 24, "items_per_time": 30},
+  "library_config": {"storage": "creator.sqlite3", "split_by_sub_category": false}
+}

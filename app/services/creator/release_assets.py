@@ -10,9 +10,9 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
-from . import extract, rendering, store, topics
+from . import composition, extract, rendering, store, topics
 
 _ASPECTS = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}
 _STYLES = (
@@ -154,7 +154,10 @@ def _image(path):
 
 
 def _font_path():
-    fonts = (
+    resource = Path(__file__).resolve().parents[3] / "resource" / "fonts"
+    configured = os.environ.get("MPT_CREATOR_FONT", "").strip()
+    fonts = ([Path(configured)] if configured else []) + [
+        resource / "NotoSansSC.ttf",
         Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts/msyhbd.ttc",
         Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts/msyh.ttc",
         Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts/simhei.ttf",
@@ -165,7 +168,7 @@ def _font_path():
         Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
         Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
         Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-    )
+    ]
     font = next((path for path in fonts if path.is_file()), None)
     if font is None:
         raise ReleaseAssetsError("未找到可显示中文的本机字体。请安装微软雅黑或 Noto Sans CJK 后生成封面。")
@@ -207,7 +210,7 @@ def _layout_title(title, width, height, max_size, *, font_path=None):
     closing = "，。！？；：、）》】」』”’!?.,;:)]}"
     avoid_hanging = "\n" not in title and title[0] not in closing
     for size in range(max_size, 13, -1):
-        font = ImageFont.truetype(font_path, size=size)
+        font = composition.load_font(font_path, size, weight=700)
         lines = _wrap_title(title, font, width)
         line_height = math.ceil(size * 1.27)
         if avoid_hanging and any(line.startswith(tuple(closing)) for line in lines[1:]):

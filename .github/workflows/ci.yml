@@ -49,7 +49,7 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: |
-            creator-renderer/package-lock.json
+            creator-hyperframes/package-lock.json
             creator-browser/package-lock.json
 
       - name: Install media tools and Chinese fonts
@@ -79,7 +79,7 @@ jobs:
 
       - name: Install creator Node components
         run: |
-          npm ci --prefix creator-renderer
+          npm ci --prefix creator-hyperframes
           npm ci --prefix creator-browser
 
       - name: Check publishing browser policy
