@@ -1,6 +1,8 @@
 import ast
 import json
 from pathlib import Path
+from unittest.mock import patch
+import wave
 
 import pytest
 
@@ -177,35 +179,54 @@ def test_settings_preset_round_trip_preserves_generation_settings():
     assert restored["paragraph_number"] == 3
 
 
-def test_settings_preset_round_trip_preserves_builtin_bgm_filename():
+def test_settings_preset_round_trip_preserves_builtin_bgm_filename(tmp_path):
+    songs = tmp_path / "songs"
+    songs.mkdir()
+    filename = "preset-fixture.wav"
+    with wave.open(str(songs / filename), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 800)
     params = VideoParams(
         video_subject="a cat",
         bgm_type="preset",
-        bgm_file="output000.mp3",
+        bgm_file=filename,
     ).model_dump(mode="json")
 
-    payload = build_settings_preset_payload(params, "1")
-    restored = parse_settings_preset(_encode(payload))
+    with patch.object(bgm_service.utils, "song_dir", return_value=str(songs)):
+        payload = build_settings_preset_payload(params, "1")
+        restored = parse_settings_preset(_encode(payload))
 
-    assert payload["params"]["bgm_file"] == "output000.mp3"
+    assert payload["params"]["bgm_file"] == filename
     assert restored["bgm_type"] == "preset"
-    assert restored["bgm_file"] == "output000.mp3"
+    assert restored["bgm_file"] == filename
 
 
-def test_settings_preset_rejects_unsafe_or_missing_builtin_bgm():
-    for bgm_file in ("../output000.mp3", "missing-preset-song.mp3"):
-        payload = {
-            "schema": SETTINGS_PRESET_SCHEMA,
-            "version": SETTINGS_PRESET_VERSION,
-            "params": {
-                "video_subject": "a cat",
-                "bgm_type": "preset",
-                "bgm_file": bgm_file,
-            },
-        }
+def test_settings_preset_rejects_unsafe_or_missing_builtin_bgm(tmp_path):
+    songs = tmp_path / "songs"
+    songs.mkdir()
+    valid = songs / "preset-fixture.wav"
+    with wave.open(str(valid), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 800)
+    with patch.object(bgm_service.utils, "song_dir", return_value=str(songs)):
+        assert bgm_service.resolve_builtin_bgm_file(valid.name) == str(valid.resolve())
+        for bgm_file in ("../preset-fixture.wav", "missing-preset-song.wav", str(valid), "songs/preset-fixture.wav"):
+            payload = {
+                "schema": SETTINGS_PRESET_SCHEMA,
+                "version": SETTINGS_PRESET_VERSION,
+                "params": {
+                    "video_subject": "a cat",
+                    "bgm_type": "preset",
+                    "bgm_file": bgm_file,
+                },
+            }
 
-        with pytest.raises(ValueError):
-            parse_settings_preset(_encode(payload))
+            with pytest.raises(ValueError):
+                parse_settings_preset(_encode(payload))
 
 
 def test_settings_preset_accepts_file_without_video_subject():

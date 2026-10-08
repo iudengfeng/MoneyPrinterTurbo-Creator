@@ -7,6 +7,7 @@ import threading
 import time
 import types
 import unittest
+import wave
 from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -27,6 +28,29 @@ from app.services import video as vd
 from app.utils import logging_utils, utils
 
 resources_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
+
+
+@contextmanager
+def _temporary_bgm_library():
+    """用可解码音频和临时白名单目录验证 BGM，不依赖或改写分发曲库。"""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        project_root = Path(temp_dir)
+        song_dir = project_root / "resource" / "songs"
+        upload_dir = project_root / "storage" / "bgm"
+        song_dir.mkdir(parents=True)
+        upload_dir.mkdir(parents=True)
+        bgm_path = song_dir / "test-bgm.wav"
+        with wave.open(str(bgm_path), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            audio.writeframes(b"\x00\x00" * 800)
+        with (
+            patch.object(utils, "root_dir", return_value=str(project_root)),
+            patch.object(utils, "song_dir", return_value=str(song_dir)),
+            patch.object(vd.bgm_service, "uploaded_bgm_dir", return_value=str(upload_dir)),
+        ):
+            yield project_root, bgm_path
 
 
 @contextmanager
@@ -654,15 +678,11 @@ class TestVideoService(unittest.TestCase):
         BGM 列表接口现在只暴露文件名；生成视频时应能把文件名安全解析回
         resource/songs 白名单目录，保持正常使用路径可用。
         """
-        song_dir = utils.song_dir()
-        bgm_path = os.path.join(song_dir, "test-safe-bgm.mp3")
-        Path(bgm_path).write_bytes(b"fake-mp3")
-
-        try:
-            self.assertEqual(vd.get_bgm_file(bgm_file="test-safe-bgm.mp3"), bgm_path)
-        finally:
-            if os.path.exists(bgm_path):
-                os.remove(bgm_path)
+        with _temporary_bgm_library() as (_, bgm_path):
+            resolved = vd.get_bgm_file(bgm_type="custom", bgm_file=bgm_path.name)
+            self.assertEqual(resolved, str(bgm_path.resolve()))
+            with vd.AudioFileClip(resolved) as audio:
+                self.assertAlmostEqual(audio.duration, 0.1, places=2)
 
     def test_get_bgm_file_accepts_project_relative_song_path(self):
         """
@@ -670,26 +690,25 @@ class TestVideoService(unittest.TestCase):
         项目根目录相对路径，但实际文件仍在 resource/songs 白名单目录内，
         应该被接受，避免自定义背景音乐被误判为不存在。
         """
-        song_dir = utils.song_dir()
-        bgm_path = os.path.join(song_dir, "test-relative-bgm.mp3")
-        Path(bgm_path).write_bytes(b"fake-mp3")
-
-        try:
+        with _temporary_bgm_library() as (_, bgm_path):
             self.assertEqual(
-                vd.get_bgm_file(bgm_file="./resource/songs/test-relative-bgm.mp3"),
-                bgm_path,
+                vd.get_bgm_file(
+                    bgm_type="custom", bgm_file="./resource/songs/test-bgm.wav"
+                ),
+                str(bgm_path.resolve()),
             )
-        finally:
-            if os.path.exists(bgm_path):
-                os.remove(bgm_path)
 
     def test_get_bgm_file_rejects_path_outside_song_directory(self):
         """
         用户传入的 bgm_file 不能直接作为本地路径打开，否则可能读取系统文件。
         即使外部文件存在，也必须因为不在 songs 目录内被拒绝。
         """
-        with tempfile.NamedTemporaryFile(suffix=".mp3") as temp_bgm:
-            self.assertEqual(vd.get_bgm_file(bgm_file=temp_bgm.name), "")
+        with _temporary_bgm_library() as (project_root, bgm_path):
+            outside_path = project_root / "outside.wav"
+            shutil.copyfile(bgm_path, outside_path)
+            self.assertEqual(
+                vd.get_bgm_file(bgm_type="custom", bgm_file=str(outside_path)), ""
+            )
 
     def test_get_ffmpeg_binary_uses_configured_env_path(self):
         """配置中显式指定 ffmpeg 时，应优先使用该路径。"""
@@ -889,7 +908,10 @@ class TestVideoService(unittest.TestCase):
             output_file = os.path.join(temp_dir, "combined.mp4")
             Path(clip_file).write_bytes(b"fake")
 
-            with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+            with (
+                patch.object(vd, "_ffmpeg_encoder_exists", return_value=True),
+                patch.object(vd.utils, "get_ffmpeg_binary", return_value="ffmpeg"),
+            ):
                 with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
                     vd.concat_video_clips_with_ffmpeg(
                         clip_files=[clip_file],
@@ -1720,7 +1742,10 @@ class TestVideoService(unittest.TestCase):
             output_file = os.path.join(temp_dir, "combined.mp4")
             Path(clip_file).write_bytes(b"fake")
 
-            with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+            with (
+                patch.object(vd, "_ffmpeg_encoder_exists", return_value=True),
+                patch.object(vd.utils, "get_ffmpeg_binary", return_value="ffmpeg"),
+            ):
                 with patch.object(vd.subprocess, "run", side_effect=timed_out_run) as run:
                     with self.assertRaisesRegex(TimeoutError, "12 seconds"):
                         vd.concat_video_clips_with_ffmpeg(
@@ -1969,7 +1994,7 @@ class TestVideoService(unittest.TestCase):
 
         仅检查 wrap_text() 返回值会漏掉 Pillow/MoviePy 在 baseline、描边和
         行间距上的组合差异，因此这里直接读取 TextClip 的透明 mask。覆盖文本
-        均由对应内置字体完整支持，包括英文、越南语、泰语、简繁中文、俄语
+        均由内置 NotoSansSC 字体完整支持，包括英文、越南语、简繁中文、俄语
         和希腊语；只要可见像素触及最后一行，就说明仍存在静默裁切风险。
         """
         font_size = 60
@@ -1989,15 +2014,6 @@ class TestVideoService(unittest.TestCase):
                 "Tôi vẫn luôn tin vào một tương lai tươi sáng",
             ),
             (
-                "thai",
-                next((str(path) for path in (
-                    Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts/LeelawUI.ttf",
-                    Path("/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"),
-                    Path("/usr/share/fonts/truetype/noto/NotoSansThaiUI-Regular.ttf"),
-                ) if path.is_file()), "NotoSansSC.ttf"),
-                "นี่คือข้อความสำหรับตรวจสอบบรรทัดสุดท้ายของคำบรรยาย",
-            ),
-            (
                 "simplified_chinese",
                 "NotoSansSC.ttf",
                 "这是一个用于检查字幕最后一行是否完整显示的测试句子",
@@ -2015,9 +2031,15 @@ class TestVideoService(unittest.TestCase):
             (
                 "greek",
                 "NotoSansSC.ttf",
-                "Αυτό είναι κείμενο για τον έλεγχο της τελευταίας γραμμής",
+                "Αυτο ειναι κειμενο για τον ελεγχο της τελευταιας γραμμης",
             ),
         )
+
+        font_path = os.path.join(utils.font_dir(), "NotoSansSC.ttf")
+        # 缺字不能被方框的可见像素误当作正确渲染；仅支持的文字进入画面检查。
+        for text in ("นี่คือข้อความ", "Αυτό είναι κείμενο"):
+            with self.subTest(unsupported_text=text):
+                self.assertFalse(vd.subtitle_font_supports_text(font_path, text))
 
         for language, font_name, text in cases:
             font_path = os.path.join(utils.font_dir(), font_name)

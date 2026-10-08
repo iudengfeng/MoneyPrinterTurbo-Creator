@@ -299,11 +299,19 @@ class CreatorRenderingTest(unittest.TestCase):
 
     def test_presets_and_local_library_are_real_and_do_not_claim_genre(self):
         self.assertEqual({row['id'] for row in rendering.list_presets()}, {'clean', 'bold', 'knowledge', 'business'})
-        music = rendering.list_bgm()
-        self.assertGreater(len(music), 0)
-        self.assertTrue(all(Path(row['path']).is_file() for row in music))
-        self.assertTrue(all(row['name'].startswith('本机音乐 ') for row in music))
-        self.assertTrue(all('genre' not in row for row in music))
+        songs = self.root / 'resource/songs'
+        songs.mkdir(parents=True)
+        with patch.object(rendering, '__file__', str(self.root / 'app/services/creator/rendering.py')):
+            self.assertEqual(rendering.list_bgm(), [])
+            track = songs / 'fixture.wav'
+            shutil.copy2(self.music, track)
+            (songs / 'not-music.txt').write_text('not selectable', 'utf-8')
+            music = rendering.list_bgm()
+        self.assertEqual(len(music), 1)
+        self.assertEqual(music[0]['path'], str(track.resolve()))
+        self.assertTrue(rendering.probe_source(music[0]['path'])['has_audio'])
+        self.assertTrue(music[0]['name'].startswith('本机音乐 '))
+        self.assertNotIn('genre', music[0])
 
 
 if __name__ == '__main__':

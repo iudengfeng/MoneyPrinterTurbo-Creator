@@ -120,25 +120,22 @@ class TestSubtitleBackgroundSettings(unittest.TestCase):
             video.subtitle_colors_are_indistinguishable(background_disabled_params)
         )
 
-    def test_detects_font_without_chinese_glyphs(self):
+    def test_detects_font_without_required_glyphs(self):
         fonts_dir = (
             Path(__file__).parent.parent.parent / "resource" / "fonts"
         )
+        font_path = str(fonts_dir / "NotoSansSC.ttf")
 
+        self.assertTrue(Path(font_path).is_file(), "expected bundled subtitle font")
+        self.assertTrue(
+            video.subtitle_font_supports_text(font_path, "人工智能改变生活")
+        )
+        self.assertTrue(
+            video.subtitle_font_supports_text(font_path, "Artificial intelligence")
+        )
+        # 唯一随包分发的字体支持中英，但不包含泰文字形；缺字应明确拒绝。
         self.assertFalse(
-            video.subtitle_font_supports_text(
-                str(fonts_dir / "BeVietnamPro-Bold.ttf"), "人工智能改变生活"
-            )
-        )
-        self.assertTrue(
-            video.subtitle_font_supports_text(
-                str(fonts_dir / "MicrosoftYaHeiBold.ttc"), "人工智能改变生活"
-            )
-        )
-        self.assertTrue(
-            video.subtitle_font_supports_text(
-                str(fonts_dir / "BeVietnamPro-Bold.ttf"), "Artificial intelligence"
-            )
+            video.subtitle_font_supports_text(font_path, "นี่คือข้อความ")
         )
 
     def test_wrap_text_keeps_closing_punctuation_with_text(self):
@@ -150,7 +147,7 @@ class TestSubtitleBackgroundSettings(unittest.TestCase):
             Path(__file__).parent.parent.parent
             / "resource"
             / "fonts"
-            / "MicrosoftYaHeiBold.ttc"
+            / "NotoSansSC.ttf"
         )
 
         wrapped_text, _ = video.wrap_text(

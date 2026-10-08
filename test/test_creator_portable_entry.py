@@ -90,7 +90,8 @@ class PortableEntryTests(unittest.TestCase):
         database = self.file("storage/creator/creator.db", b"customer database remains untouched")
         self.file("resource/fonts/NotoSansSC.ttf")
         self.file("resource/fonts/NotoSansSC-OFL.txt")
-        with patch.object(entry.sys, "executable", str(self.root / "runtime/python/python.exe")), \
+        with patch.object(entry.sys, "version_info", (3, 11, 0, "final", 0)), \
+             patch.object(entry.sys, "executable", str(self.root / "runtime/python/python.exe")), \
              patch.object(entry, "_python_dependencies", return_value=[]), patch.object(entry, "_node", return_value=self.root / "runtime/node/node.exe"), \
              patch.object(entry, "_media", return_value=(self.root / "runtime/ffmpeg/ffmpeg.exe", self.root / "runtime/ffmpeg/ffprobe.exe")), \
              patch.object(entry, "_node_dependencies", return_value=[]), patch.object(entry, "_select_browsers", return_value={"render_source": "app_chromium", "publish_source": "app_chromium"}), \
@@ -102,12 +103,21 @@ class PortableEntryTests(unittest.TestCase):
 
     def test_legacy_python_never_installs_into_shared_or_target_environment(self):
         self.file("config.toml", b"keep old customer settings")
-        with patch.object(entry, "inspect", return_value={"ready": False}), patch.object(entry, "_run") as command, \
+        with patch.object(entry.sys, "version_info", (3, 11, 0, "final", 0)), \
+             patch.object(entry, "inspect", return_value={"ready": False}), patch.object(entry, "_run") as command, \
              patch.object(entry, "_download") as download, self.assertRaisesRegex(RuntimeError, "仅检查和复用"):
             entry.prepare()
         command.assert_not_called()
         download.assert_not_called()
         self.assertEqual((self.root / "config.toml").read_bytes(), b"keep old customer settings")
+
+    def test_unbundled_python_version_is_rejected_before_any_installation(self):
+        with patch.object(entry.sys, "version_info", (3, 13, 0, "final", 0)), \
+             patch.object(entry, "_run") as command, patch.object(entry, "_download") as download:
+            with self.assertRaisesRegex(RuntimeError, "Python 3.11"):
+                entry.prepare()
+        command.assert_not_called()
+        download.assert_not_called()
 
     def test_global_scrapling_does_not_masquerade_as_isolated_target(self):
         with patch.object(entry, "_run") as command:

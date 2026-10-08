@@ -6,6 +6,8 @@
 
 **Windows 10/11 64位用户优先下载 [Releases 中的 Windows 双击启动包](https://github.com/iudengfeng/MoneyPrinterTurbo-Creator/releases/latest)。**
 
+本版 `creator-v2026.10.08.2` 修复发布制作列“定时发布”按钮被提示层隐藏的问题。按钮仍下载手动发布清单，按选定时间自行发布；完整记录见[本版更新说明](docs/creator-release-notes.md)。
+
 1. 完整解压到可写文件夹，路径可以包含中文或空格。
 2. 双击 **启动数字人口播.cmd**。第一次联网自动准备应用专用运行环境，完成后打开浏览器。
 3. 在四列首页导入或编辑文案，选择音色和形象，生成语音、口播与成片；已有口播视频也可以直接导入处理。

@@ -329,7 +329,7 @@ def test_invalid_saved_generation_settings_fall_back_without_breaking_webui():
     assert not isinstance(test_ui_config["video_count"], bool)
     assert _widget_by_key(app.selectbox, "voice_volume_select").value == 1.0
     assert _widget_by_key(app.selectbox, "voice_rate_select").value == 1.0
-    assert _widget_by_key(app.selectbox, "bgm_type_select").value == "random"
+    assert _widget_by_key(app.selectbox, "bgm_type_select").value == ""
     assert _widget_by_key(app.selectbox, "bgm_volume_select").value == 0.2
     assert _widget_by_key(app.checkbox, "subtitle_enabled_checkbox").value is False
     assert _widget_by_key(app.color_picker, "stroke_color_picker").value == "#000000"
