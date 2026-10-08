@@ -19,6 +19,27 @@ HEADINGS = (
     ("04", "发布制作", "发布信息、封面制作与多平台发布"),
 )
 
+DARK_THEME_CSS = """
+body:has(.st-key-reference_workbench) {
+  color-scheme:dark;
+  --ref-bg:#1c2237; --ref-surface:#252d45; --ref-card:#29324c;
+  --ref-text:#e8edff; --ref-muted:#b6c1dd; --ref-line:#46516f;
+  --ref-field:#202940; --ref-soft:#313657;
+  --ref-bg-start:#17263a; --ref-bg-end:#29213c;
+  --ref-sidebar-start:#1c2b42; --ref-sidebar-end:#25283d;
+  --ref-header-start:#23324b; --ref-header-end:#302b47;
+  --ref-heading-start:#293750; --ref-heading-end:#34304e;
+  --ref-brand:#dceaff; --ref-brand-shadow:#354669;
+  --ref-badge:#293c50; --ref-badge-text:#dceaff;
+  --ref-nav:#d1def4; --ref-nav-icon:#abc5e4;
+  --ref-nav-start:#344769; --ref-nav-end:#463b68;
+  --ref-counter-start:#3b4768; --ref-counter-end:#4a456d;
+  --ref-counter-text:#e0e6fa;
+  --ref-empty-start:#28314c; --ref-empty-end:#302f4b;
+  --ref-frame:#455271; --ref-scroll:#617299;
+}
+"""
+
 
 def _navigate(name):
     st.session_state["ref_sidebar_view"] = name
@@ -127,7 +148,7 @@ def _auxiliary(ctx, name, factory_callback=None):
                         st.image(str(path), width=180)
         elif name == "帮助":
             st.markdown("先导入视频或填写文案，再生成语音和人物口播，处理字幕与音乐，最后预览封面并发布。")
-            st.markdown("**一键成片**：有文案时，在首页选择音色与形象后点击“生成成片”，程序会继续准备前面的步骤。")
+            st.markdown("**一键成片**：在视频处理栏选择“一键成片”，再点击同名按钮，程序会生成视频、封面与发布资料。发布前仍可预览确认。")
             st.markdown("**分步制作**：依次使用“撰写文案”“生成语音”“生成口播”“生成成片”，每一步都能预览。")
             st.markdown("已有作品和客户资料在左下角保存；数字人管理位于口播制作中的“管理形象”。")
         else:
@@ -145,9 +166,7 @@ def render(settings_callback=None):
     stylesheet = Path(__file__).with_name("creator_reference.css").read_text("utf-8")
     st.markdown('<style>' + stylesheet + '</style>', unsafe_allow_html=True)
     if st.session_state["ref_theme"] == "dark":
-        st.markdown('<style>body:has(.st-key-reference_workbench){--ref-bg:#1c2237;--ref-surface:#252d45;'
-                    '--ref-card:#29324c;--ref-text:#e8edff;--ref-muted:#a0abc9;--ref-line:#414b6a;'
-                    '--ref-field:#202940;--ref-soft:#313657}</style>', unsafe_allow_html=True)
+        st.markdown('<style>' + DARK_THEME_CSS + '</style>', unsafe_allow_html=True)
     _sidebar(ctx)
     _header(settings_callback)
     with st.container(key="reference_workbench"):

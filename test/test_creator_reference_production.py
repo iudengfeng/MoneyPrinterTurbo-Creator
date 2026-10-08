@@ -7,6 +7,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from app.services.creator import narration
+from webui import creator_reference_production as production
 
 
 class ReferenceContext:
@@ -99,6 +100,19 @@ with right:
         self.assertFalse(app.exception)
         return app
 
+    def import_app(self, **state):
+        app = AppTest.from_string("""import streamlit as st
+from webui.creator_reference_production import _import_video
+_import_video(st.session_state['test_ctx'])
+""", default_timeout=30)
+        app.session_state["test_ctx"] = self.context
+        app.session_state["ref_video_import_scope"] = "scope-a"
+        for key, value in state.items():
+            app.session_state[key] = value
+        app.run()
+        self.assertFalse(app.exception)
+        return app
+
     def test_narration_dispatches_complete_script_selected_voice_and_real_speed(self):
         app = self.app()
         app.selectbox(key="ref_voice_id").set_value("duix:12").run()
@@ -125,18 +139,28 @@ with right:
         })])
         self.engine.assert_called_once()
 
-    def test_unavailable_resolution_and_service_are_explicit_errors(self):
-        app = self.app()
-        self.assertEqual(app.radio(key="ref_resolution").value, "720P")
-        app.radio(key="ref_resolution").set_value("1080P").run()
-        app.button(key="ref_generate_avatar").click().run()
-        self.assertFalse(self.context.submissions)
-        self.assertTrue(any("仅支持 720P" in item.value for item in app.error))
-        app.radio(key="ref_resolution").set_value("720P").run()
+    def test_only_720p_can_be_selected_and_missing_service_remains_an_explicit_error(self):
+        app = self.app(ref_resolution="1080P")
+        self.assertEqual(app.session_state["ref_resolution"], "720P")
+        self.assertTrue(any("已切换到 720P" in item.value for item in app.caption))
+        self.assertTrue(app.button(key="ref_resolution_576p").disabled)
+        self.assertTrue(app.button(key="ref_resolution_1080p").disabled)
+        self.assertFalse(app.button(key="ref_resolution_720p").disabled)
+        app.button(key="ref_resolution_1080p").click().run()
+        self.assertEqual(app.session_state["ref_resolution"], "720P")
         self.engine.return_value = {"available": False, "reason": "本机 Duix 尚未配置"}
         app.button(key="ref_generate_avatar").click().run()
         self.assertFalse(self.context.submissions)
         self.assertTrue(any("尚未配置" in item.value for item in app.error))
+
+    def test_unsupported_resolution_is_also_guarded_when_a_request_bypasses_the_picker(self):
+        with patch.object(production.st, "session_state", {"ref_resolution": "1080P"}):
+            with self.assertRaisesRegex(ValueError, "仅支持 720P"):
+                production._avatar_request(self.context, self.profiles[0])
+            with self.assertRaisesRegex(ValueError, "仅支持 720P"):
+                production._render_request(self.context)
+        self.assertFalse(self.context.submissions)
+        self.engine.assert_not_called()
 
     def test_missing_profile_remains_empty_and_opens_existing_identity_tool(self):
         self.profiles = []
@@ -159,6 +183,8 @@ with right:
         app.slider(key="ref_bgm_volume").set_value(0.23).run()
         app.selectbox(key="ref_color_grade").set_value("warm").run()
         app.selectbox(key="ref_video_fit").set_value("cover").run()
+        app.radio(key="ref_creation_mode").set_value("step_by_step").run()
+        self.assertEqual(app.button(key="ref_generate_render").label, "生成成片")
         app.button(key="ref_generate_render").click().run()
         self.assertEqual(self.context.submissions, [("render", {
             "subtitle_style": "none", "bgm_path": music, "bgm_volume": 0.23,
@@ -167,6 +193,27 @@ with right:
         app.run()
         self.assertFalse(app.toggle(key="ref_subtitles").value)
         self.assertEqual(app.slider(key="ref_bgm_volume").value, 0.23)
+        self.assertEqual(app.radio(key="ref_creation_mode").value, "step_by_step")
+
+    def test_default_one_click_requests_local_release_materials_without_publishing(self):
+        with patch("app.services.creator.publishing.execute_publish", side_effect=AssertionError("Unexpected external publication")) as publish:
+            app = self.app()
+            self.assertEqual(app.radio(key="ref_creation_mode").value, "one_click")
+            self.assertEqual(app.button(key="ref_generate_render").label, "一键成片")
+            self.assertTrue(any("发布需另行确认" in item.value for item in app.caption))
+            app.button(key="ref_generate_render").click().run()
+        self.assertEqual(len(self.context.submissions), 1)
+        self.assertEqual(self.context.submissions[0][0], "release")
+        self.assertEqual(self.context.submissions[0][1]["subtitle_style"], "clean")
+        self.assertFalse(self.context.queued)
+        publish.assert_not_called()
+        self.provider.assert_not_called()
+
+    def test_unknown_creation_mode_does_not_submit_any_stage(self):
+        with patch.object(production.st, "session_state", {"ref_creation_mode": "publish_now"}):
+            with self.assertRaisesRegex(ValueError, "一键成片或分步制作"):
+                production._render_request(self.context)
+        self.assertFalse(self.context.submissions)
 
     def test_music_missing_and_duplicate_burned_subtitles_block_submission(self):
         app = self.app(ref_bgm_enabled=True, ref_bgm_path=str(Path(self.directory.name) / "moved.mp3"))
@@ -198,10 +245,125 @@ with right:
         self.assertEqual(len(app.get("audio")), 1)
         self.assertEqual(len(app.get("video")), 2)
         self.assertEqual([item.proto.label for item in app.get("download_button")], ["下载成片"])
+        self.assertFalse(app.button(key="ref_avatar_preview_expand").disabled)
+        self.assertFalse(app.button(key="ref_render_preview_expand").disabled)
         Path(self.context.finished).unlink()
         app.run()
         self.assertFalse(app.get("download_button"))
         self.assertEqual(len(app.get("video")), 1)
+        self.assertTrue(app.button(key="ref_render_preview_expand").disabled)
+
+    def test_empty_or_zero_byte_media_does_not_offer_playback_or_expansion(self):
+        self.context.source = str(Path(self.directory.name) / "missing.mp4")
+        empty = Path(self.directory.name) / "empty.mp4"
+        empty.touch()
+        self.context.finished = str(empty)
+        app = self.app()
+        self.assertTrue(app.button(key="ref_avatar_preview_expand").disabled)
+        self.assertTrue(app.button(key="ref_render_preview_expand").disabled)
+        self.assertFalse(app.get("video"))
+        self.assertFalse(app.get("download_button"))
+        self.assertFalse(any("点击画面可播放" in item.value for item in app.caption))
+
+    def test_expanded_source_preview_plays_and_downloads_the_selected_existing_file(self):
+        self.context.source = self.file("selected-source.mp4")
+        self.context.finished = self.file("different-final.mp4")
+        app = self.app()
+        app.button(key="ref_avatar_preview_expand").click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.get("dialog"))
+        self.assertEqual(len(app.get("video")), 3)
+        self.assertIn("口播视频 · selected-source.mp4", [item.value for item in app.caption])
+        self.assertIn("下载口播视频", [item.proto.label for item in app.get("download_button")])
+        self.assertFalse(self.context.submissions)
+
+    def test_expanded_final_preview_keeps_the_final_file_and_does_not_start_a_job(self):
+        self.context.source = self.file("different-source.mp4")
+        self.context.finished = self.file("selected-final.mp4")
+        app = self.app()
+        app.button(key="ref_render_preview_expand").click().run()
+        self.assertFalse(app.exception)
+        self.assertIn("成片 · selected-final.mp4", [item.value for item in app.caption])
+        self.assertTrue(app.get("dialog"))
+        self.assertEqual(len(app.get("download_button")), 2)
+        self.assertFalse(self.context.submissions)
+        self.assertFalse(self.context.queued)
+
+    def test_dialog_checks_a_file_again_after_it_has_disappeared(self):
+        path = self.file("removed.mp4")
+        Path(path).unlink()
+        app = AppTest.from_string("""import streamlit as st
+from webui.creator_reference_production import _expanded_video
+_expanded_video(st.session_state['test_path'], rendered=True)
+""", default_timeout=30)
+        app.session_state["test_path"] = path
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("移动、删除或为空" in item.value for item in app.warning))
+        self.assertFalse(app.get("video"))
+        self.assertFalse(app.get("download_button"))
+
+    def test_failed_video_import_waits_for_explicit_retry_and_honors_busy_guard(self):
+        path = self.file("failed-import.mp4")
+        self.context.project["id"] = "project-a"
+        failure = {"project_id": "project-a", "source_video_path": path, "message": "识别暂时失败"}
+        with patch.object(production.st, "file_uploader", return_value=path):
+            app = self.import_app(ref_imported_voice_video=path, ref_video_import_failure=failure)
+            app.run()
+            self.assertFalse(self.context.media)
+            self.context.busy = True
+            app.run()
+            self.assertTrue(app.button(key="ref_voice_video_retry_scope-a").disabled)
+            app.button(key="ref_voice_video_retry_scope-a").click().run()
+            self.assertFalse(self.context.media)
+            self.context.busy = False
+            app.run()
+            app.button(key="ref_voice_video_retry_scope-a").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(self.context.media, [("video", path)])
+        self.assertNotIn("ref_video_import_failure", app.session_state)
+
+    def test_new_selected_video_is_imported_once_even_after_a_previous_failure(self):
+        old = self.file("previous-failure.mp4")
+        new = self.file("new-selected.mp4")
+        self.context.project["id"] = "project-a"
+        failure = {"project_id": "project-a", "source_video_path": old, "message": "旧文件识别失败"}
+        with patch.object(production.st, "file_uploader", return_value=new):
+            app = self.import_app(ref_imported_voice_video=old, ref_video_import_failure=failure)
+            app.run()
+        self.assertEqual(self.context.media, [("video", new)])
+        self.assertEqual(app.session_state["ref_imported_voice_video"], new)
+
+    def test_video_uploader_scope_prevents_previous_projects_file_from_being_reused(self):
+        path = self.file("project-a-selected.mp4")
+        keys = []
+
+        def upload(*_args, **kwargs):
+            keys.append(kwargs["key"])
+            return path if kwargs["key"] == "ref_voice_video_upload_scope-a" else None
+
+        self.context.project["id"] = "project-a"
+        with patch.object(production.st, "file_uploader", side_effect=upload):
+            app = self.import_app()
+            self.assertEqual(self.context.media, [("video", path)])
+            self.context.project["id"] = "project-b"
+            app.session_state["ref_video_import_scope"] = "scope-b"
+            del app.session_state["ref_imported_voice_video"]
+            app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(self.context.media, [("video", path)])
+        self.assertIn("ref_voice_video_upload_scope-b", keys)
+
+    def test_immediate_import_error_is_not_repeated_on_every_rerun(self):
+        path = self.file("invalid-import.mp4")
+        with patch.object(production.st, "file_uploader", return_value=path), \
+             patch.object(self.context, "use_media", side_effect=ValueError("无法读取视频")) as use:
+            app = self.import_app()
+            app.run()
+            app.run()
+            self.assertEqual(use.call_count, 1)
+            self.assertEqual(app.session_state["ref_imported_voice_video"], path)
+            self.assertFalse(app.button(key="ref_voice_video_retry_scope-a").disabled)
 
     def test_empty_script_does_not_dispatch_voice_and_history_requires_explicit_use(self):
         audio = self.file("history.wav")
@@ -223,6 +385,8 @@ with right:
             self.assertTrue(app.button(key=key).disabled)
         self.assertTrue(app.selectbox(key="ref_voice_id").disabled)
         self.assertTrue(app.toggle(key="ref_subtitles").disabled)
+        self.assertTrue(app.radio(key="ref_creation_mode").disabled)
+        self.assertTrue(app.button(key="ref_resolution_720p").disabled)
         self.assertFalse(self.context.submissions)
         self.assertFalse(self.context.queued)
 

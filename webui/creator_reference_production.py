@@ -22,7 +22,7 @@ def _existing_file(value):
         return None
     try:
         path = Path(str(value)).expanduser()
-        return path if path.is_file() else None
+        return path if path.is_file() and path.stat().st_size else None
     except (OSError, ValueError):
         return None
 
@@ -132,23 +132,52 @@ def _audio_history(ctx, rows):
                     _attempt(ctx.use_media, "audio", row["audio_path"])
 
 
+@st.dialog("视频预览", width="large", on_dismiss="rerun")
+def _expanded_video(value, rendered=False):
+    path = _existing_file(value)
+    if not path:
+        st.warning("视频文件已移动、删除或为空，请重新生成或导入。")
+        return
+    try:
+        data = path.read_bytes()
+    except OSError:
+        st.warning("视频文件暂时无法读取，请重新生成或导入。")
+        return
+    with st.container(key="ref_video_dialog"):
+        st.caption(("成片" if rendered else "口播视频") + " · " + path.name)
+        st.video(data, width="stretch")
+        st.download_button(
+            "下载成片" if rendered else "下载口播视频", data=data, file_name=path.name,
+            mime="video/mp4" if path.suffix.lower() == ".mp4" else None,
+            key="ref_video_dialog_download_render" if rendered else "ref_video_dialog_download_avatar",
+            width="stretch",
+        )
+
+
 def _video_preview(ctx, *, rendered=False):
     path = _existing_file(ctx.current_video(rendered=rendered))
     key = "ref_render_preview" if rendered else "ref_avatar_preview"
     with st.container(key=key, height=350, border=True):
-        heading, action = st.columns([2.1, 1], gap="small", vertical_alignment="center")
+        columns = st.columns([2.1, 1.4] if rendered else [2.1, 1.4, 1.2], gap="small", vertical_alignment="center")
+        heading, expand = columns[:2]
         heading.markdown("**" + ("画面处理预览" if rendered else "口播视频预览") + "**")
+        if expand.button(
+            "放大预览", key="ref_render_preview_expand" if rendered else "ref_avatar_preview_expand",
+            width="stretch", disabled=not path,
+        ) and path:
+            _expanded_video(str(path), rendered)
         if not rendered:
-            with action, st.popover("导入视频", use_container_width=True):
+            with columns[2], st.popover("导入视频", use_container_width=True):
                 _import_video(ctx)
-        heading.caption("当前生成效果，点击画面可播放")
         if path:
+            heading.caption("当前已有视频")
             _, middle, _ = st.columns([1, 1.8, 1], gap="small")
             with middle:
                 st.video(str(path), width="stretch")
         else:
-            st.markdown('<div class="ref-portrait-empty"><span class="ref-preview-play">▷</span>'
-                        '<strong>暂无视频预览</strong><small>生成后即可在这里查看</small></div>', unsafe_allow_html=True)
+            heading.caption("请先生成或导入视频")
+            st.markdown('<div class="ref-portrait-empty"><span class="ref-preview-play">▧</span>'
+                        '<strong>暂无视频预览</strong><small>生成或导入后在这里查看</small></div>', unsafe_allow_html=True)
     if path and rendered:
         st.download_button(
             "下载成片", data=path.read_bytes(), file_name="最终成片" + path.suffix,
@@ -158,16 +187,61 @@ def _video_preview(ctx, *, rendered=False):
 
 
 def _import_video(ctx):
+    scope = str(st.session_state.get("ref_video_import_scope", "draft"))
+    busy = _busy(ctx)
     upload = st.file_uploader("导入口播视频", type=["mp4", "mov", "mkv", "webm"],
-                              key="ref_voice_video_upload", disabled=_busy(ctx))
+                              key="ref_voice_video_upload_" + scope, disabled=busy)
     if upload:
         try:
-            path = ctx.stage_upload(upload)
-            if st.session_state.get("ref_imported_voice_video") != path:
-                ctx.use_media("video", path)
-                st.session_state["ref_imported_voice_video"] = path
+            path = str(ctx.stage_upload(upload))
         except Exception as exc:
             st.error(str(exc))
+            return
+        failure = st.session_state.get("ref_video_import_failure") or {}
+        project = getattr(ctx, "project", None) or {}
+        if failure.get("project_id") == project.get("id", "") and failure.get("source_video_path") == path:
+            st.warning(failure.get("message") or "视频导入未完成，请检查后重新导入。")
+            if st.button("重新导入", key="ref_voice_video_retry_" + scope, width="stretch", disabled=busy):
+                _apply_video_import(ctx, path)
+        elif st.session_state.get("ref_imported_voice_video") != path and not busy:
+            _apply_video_import(ctx, path)
+
+
+def _apply_video_import(ctx, path):
+    if _busy(ctx):
+        st.info("当前任务正在处理，请完成后再导入。")
+        return
+    st.session_state["ref_imported_voice_video"] = path
+    try:
+        ctx.use_media("video", path)
+    except Exception as exc:
+        project = getattr(ctx, "project", None) or {}
+        st.session_state["ref_video_import_failure"] = {
+            "project_id": project.get("id", ""), "source_video_path": path, "message": str(exc),
+        }
+        st.error(str(exc))
+        return
+    st.session_state.pop("ref_video_import_failure", None)
+    st.rerun()
+
+
+def _resolution_picker(busy):
+    if st.session_state.get("ref_resolution", "720P") != "720P":
+        st.session_state["ref_resolution"] = "720P"
+        st.caption("当前引擎仅支持 720P，已切换到 720P。")
+    else:
+        st.session_state.setdefault("ref_resolution", "720P")
+    with st.container(key="ref_resolution"):
+        columns = st.columns(3, gap="small")
+        for column, resolution in zip(columns, ("576P", "720P", "1080P")):
+            supported = resolution == "720P"
+            if column.button(
+                resolution, key="ref_resolution_" + resolution.lower(),
+                type="primary" if supported else "secondary", width="stretch",
+                disabled=busy or not supported,
+            ) and supported:
+                st.session_state["ref_resolution"] = "720P"
+    st.caption("720P 已选 · 576P / 1080P 暂不支持")
 
 
 def render_voice_column(ctx):
@@ -223,13 +297,7 @@ def render_voice_column(ctx):
                      format_func=lambda value: "人物 + 图文" if value == "mixed" else "全程人物",
                      key="ref_avatar_mode", disabled=busy, persist_state="session")
             st.caption("人物动作使用连续参考视频；素材不足时会提示补充，不循环人物画面。")
-        st.session_state.setdefault("ref_resolution", "720P")
-        resolution = st.radio(
-            "视频分辨率", ["576P", "720P", "1080P"], horizontal=True,
-            key="ref_resolution", label_visibility="collapsed", disabled=busy, persist_state="session",
-        )
-        if resolution != "720P":
-            st.warning("当前引擎仅支持 720P，请切换到 720P 后生成。")
+        _resolution_picker(busy)
     _video_preview(ctx)
     ctx.report_job_state()
 
@@ -262,7 +330,10 @@ def _render_request(ctx):
     source = _stage_result(ctx, "visuals")
     if st.session_state.get("ref_subtitles", True) and source.get("subtitles_burned"):
         raise ValueError("原视频已经包含字幕，请关闭视频字幕，避免重复叠加。")
-    ctx.submit_stage("render", changes={
+    mode = st.session_state.get("ref_creation_mode", "one_click")
+    if mode not in {"one_click", "step_by_step"}:
+        raise ValueError("请选择一键成片或分步制作。")
+    ctx.submit_stage("release" if mode == "one_click" else "render", changes={
         "subtitle_style": st.session_state.get("ref_subtitle_style", "clean") if st.session_state.get("ref_subtitles", True) else "none",
         "bgm_path": str(bgm) if bgm else "",
         "bgm_volume": float(st.session_state.get("ref_bgm_volume", 0.12)),
@@ -334,10 +405,21 @@ def render_processing_column(ctx):
         )
         st.caption("关键词用于包装；当前引擎尚不支持逐词高亮，成片中未应用高亮。")
 
+    with st.container(key="ref_creation_controls"):
+        st.session_state.setdefault("ref_creation_mode", "one_click")
+        if st.session_state["ref_creation_mode"] not in {"one_click", "step_by_step"}:
+            st.session_state["ref_creation_mode"] = "one_click"
+        mode = st.radio(
+            "制作模式", ["one_click", "step_by_step"], horizontal=True,
+            format_func=lambda value: "一键成片" if value == "one_click" else "分步制作",
+            key="ref_creation_mode", disabled=busy, persist_state="session", label_visibility="collapsed",
+        )
+        st.caption("生成成片与本地封面、发布资料；发布需另行确认。" if mode == "one_click" else
+                   "先生成成片，再到发布制作准备封面与发布资料。")
     with st.container(key="ref_render_action"):
         label, action = st.columns([1.45, 1], gap="small", vertical_alignment="center")
         label.markdown("**生成最终成片**")
         with action:
-            if st.button("生成成片", type="primary", key="ref_generate_render", width="stretch", disabled=busy):
+            if st.button("一键成片" if mode == "one_click" else "生成成片", type="primary", key="ref_generate_render", width="stretch", disabled=busy):
                 _attempt(_render_request, ctx)
     _video_preview(ctx, rendered=True)

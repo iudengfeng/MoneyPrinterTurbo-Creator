@@ -50,6 +50,7 @@ class ReferenceStateTests(unittest.TestCase):
             "work-b": _project("work-b", "作品 B 的独立稿件。"),
         }
         self.job_rows = {}
+        self.video_info = {}
         self.patches = [
             patch.dict(os.environ, {"MPT_CREATOR_DATA": self.directory.name}),
             patch.object(controller.workflow, "get_project", side_effect=self.get_project),
@@ -61,12 +62,17 @@ class ReferenceStateTests(unittest.TestCase):
             patch.object(controller.store, "data_root", return_value=Path(self.directory.name)),
             patch.object(controller.store, "save_record", side_effect=AssertionError("No real record store writes")),
             patch.object(controller.st, "toast"),
+            patch.object(controller.rendering, "probe_source", side_effect=self.probe_video),
         ]
         self.mocks = [item.start() for item in self.patches]
         for item in reversed(self.patches):
             self.addCleanup(item.stop)
         self.get_mock, self.create_mock, self.update_mock, self.pipeline_mock = self.mocks[1:5]
         self.submit_mock = self.mocks[6]
+        self.probe_mock = self.mocks[-1]
+
+    def probe_video(self, path):
+        return deepcopy(self.video_info.get(path, {"path": path, "has_video": True, "has_audio": True, "duration": 2.5}))
 
     def get_project(self, ident):
         if ident not in self.projects:
@@ -105,6 +111,18 @@ class ReferenceStateTests(unittest.TestCase):
         path = Path(self.directory.name) / name
         path.write_bytes(b"isolated-media-fixture")
         return str(path)
+
+    def finish_video_import(self, ident, video, text="视频中的真实口播内容，识别结果属于这份原片。"):
+        self.job_rows[ident] = {
+            "state": "done", "message": "文案提取完成",
+            "result": {
+                "text": text, "media_path": video,
+                "audio_path": self.media("extracted-reference.wav"), "srt_path": self.media("extracted-transcript.srt"),
+                "txt_path": self.media("extracted-transcript.txt"),
+                "segments": [{"start": 0.0, "end": 2.5, "text": text}],
+                "language": "zh", "duration": 2.5, "model_size": "small",
+            },
+        }
 
     def app(self, ident="work-a"):
         app = AppTest.from_string(SHELL, default_timeout=30)
@@ -165,7 +183,7 @@ class ReferenceStateTests(unittest.TestCase):
         self.assertEqual(self.projects["work-a"]["config"]["input_text"], generated)
 
     def test_result_for_previous_project_cannot_overwrite_new_project(self):
-        for kind in ("extract", "script", "voice_audio", "publish_copy"):
+        for kind in ("extract", "script", "voice_audio", "publish_copy", "pipeline"):
             with self.subTest(kind=kind), self.state({}, {"project": "work-b"}) as (session, _):
                 self.completed(session, kind, {"text": "旧作品结果", "audio_path": self.media("old.wav"), "title": "旧发布标题", "tags": ["旧标签"]})
                 ctx = controller.ReferenceContext()
@@ -310,6 +328,311 @@ class ReferenceStateTests(unittest.TestCase):
             self.assertEqual(session["ref_script_text"], "失败之前仍在编辑器里的手工修改。")
             self.assertEqual(session["ref_last_error"], "文案模型连接失败")
             self.assertEqual(session["ref_pending_actions"], {})
+        self.update_mock.assert_not_called()
+
+    def test_one_click_default_is_a_ui_preference_not_an_unknown_workflow_field(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            ctx = controller.ReferenceContext()
+            self.assertEqual(session["ref_creation_mode"], "one_click")
+            self.assertNotIn("creation_mode", ctx._form_config())
+            session["ref_creation_mode"] = "step_by_step"
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_creation_mode"], "step_by_step")
+
+    def test_import_after_native_mode_widget_defers_full_mode_without_state_error(self):
+        video = self.media("native-import.mp4")
+        self.projects["work-a"]["config"].update(kind="knowledge", avatar_mode="mixed")
+        app = AppTest.from_string(SHELL + """
+st.radio('画面组织', ['mixed', 'full'], key='ref_avatar_mode', persist_state='session')
+if st.button('导入原片', key='test_import_video'):
+    ctx.use_media('video', st.session_state['test_video'])
+    st.session_state['test_import_config'] = ctx._form_config()
+""", default_timeout=30)
+        app.session_state["test_requested_project"] = "work-a"
+        app.session_state["test_video"] = video
+        app.run()
+        app.button(key="test_import_video").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.radio(key="ref_avatar_mode").value, "mixed")
+        self.assertEqual(app.session_state["test_import_config"]["avatar_mode"], "full")
+        self.assertEqual(app.session_state["test_import_config"]["kind"], "avatar")
+        self.assertEqual(self.projects["work-a"]["config"]["source_video_path"], video)
+        self.assertEqual(self.projects["work-a"]["config"]["avatar_mode"], "full")
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.radio(key="ref_avatar_mode").value, "full")
+        self.assertNotIn("ref_media_preferences_pending", app.session_state)
+        self.submit_mock.assert_not_called()
+
+    def test_same_event_pipeline_cannot_replace_imported_full_video_with_old_mixed_radio(self):
+        video, audio = self.media("owned-video.mp4"), self.media("previous-voice.wav")
+        self.projects["work-a"]["config"].update(kind="knowledge", avatar_mode="mixed", audio_path=audio, allow_reference_reuse=True)
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            ctx = controller.ReferenceContext()
+            session["ref_voice_audio_result"] = {"audio_path": audio}
+            ctx.use_media("video", video)
+            self.assertEqual(session["ref_avatar_mode"], "mixed")
+            self.assertNotIn("ref_voice_audio_result", session)
+            ctx.submit_stage("release")
+            config = self.projects["work-a"]["config"]
+            self.assertEqual(config["source_video_path"], video)
+            self.assertEqual(config["kind"], "avatar")
+            self.assertEqual(config["avatar_mode"], "full")
+            self.assertFalse(config["allow_reference_reuse"])
+            self.assertEqual(config["audio_path"], "")
+            self.assertEqual(ctx.current_video(), video)
+            self.assertEqual(ctx.current_video(rendered=True), "")
+        self.pipeline_mock.assert_called_once_with("work-a", until_stage="release")
+        self.submit_mock.assert_not_called()
+
+    def test_empty_draft_with_voiced_video_queues_real_asr_then_creates_bound_project(self):
+        video = self.media("voiced-original.mp4")
+        with self.state() as (session, query):
+            ctx = controller.ReferenceContext()
+            ident = ctx.use_media("video", video)
+            self.submit_mock.assert_called_once_with("识别导入口播视频", controller.extract.extract_media,
+                                                      video, language="zh", model_size="small")
+            self.assertEqual(ctx.project, {})
+            self.create_mock.assert_not_called()
+            meta = session["ref_pending_actions"][ident]
+            self.assertEqual(meta["kind"], "video_import_extract")
+            self.assertEqual(meta["project_id"], "")
+            self.assertEqual(meta["source_video_path"], video)
+            self.assertEqual(meta["import_scope"], session["ref_video_import_scope"])
+            initial_scope = session["ref_video_import_scope"]
+            self.assertTrue(ctx.busy)
+            self.finish_video_import(ident, video)
+            result = self.job_rows[ident]["result"]
+            loaded = controller.ReferenceContext()
+            self.assertEqual(loaded.project["id"], "created-work")
+            self.assertEqual(query["project"], "created-work")
+            self.assertEqual(session["ref_video_import_scope"], initial_scope)
+            self.assertEqual(session["ref_original_text"], result["text"])
+            self.assertEqual(session["ref_script_text"], result["text"])
+            self.assertEqual(session["ref_avatar_mode"], "full")
+            self.assertEqual(loaded.project["config"]["source_video_path"], video)
+            self.assertEqual(loaded.project["config"]["kind"], "avatar")
+            self.assertEqual(loaded.project["config"]["audio_path"], "")
+            self.assertEqual(loaded.stage("voice"), {}, "No ASR checkpoint or temporary audio can be smuggled into the voice stage")
+            self.assertEqual(loaded.current_video(), video)
+            self.assertEqual(loaded.current_video(rendered=True), "")
+            self.assertEqual(session["ref_pending_actions"], {})
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_video_import_scope"], initial_scope)
+        self.create_mock.assert_called_once()
+        self.update_mock.assert_not_called()
+
+    def test_existing_project_with_cleared_editor_binds_recognition_to_that_project(self):
+        video = self.media("existing-project-import.mp4")
+        self.projects["work-a"]["config"].update(language="auto", model_size="base")
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            ctx = controller.ReferenceContext()
+            session["ref_script_text"] = ""
+            ident = ctx.use_media("video", video)
+            self.assertEqual(session["ref_pending_actions"][ident]["project_id"], "work-a")
+            self.assertEqual(self.submit_mock.call_args.kwargs, {"language": "auto", "model_size": "base"})
+            self.finish_video_import(ident, video)
+            loaded = controller.ReferenceContext()
+            self.assertEqual(loaded.project["id"], "work-a")
+            self.assertEqual(loaded.project["config"]["input_text"], self.job_rows[ident]["result"]["text"])
+            self.assertEqual(loaded.project["config"]["source_video_path"], video)
+            self.assertEqual(session["ref_avatar_mode"], "full")
+            self.assertEqual(self.projects["work-b"]["config"]["source_video_path"], "")
+        self.create_mock.assert_not_called()
+        self.update_mock.assert_called_once()
+
+    def test_silent_video_without_script_requires_real_narration_input(self):
+        video = self.media("silent-original.mp4")
+        self.video_info[video] = {"has_video": True, "has_audio": False}
+        with self.state():
+            ctx = controller.ReferenceContext()
+            with self.assertRaisesRegex(ValueError, "没有声音.*文案.*配音"):
+                ctx.use_media("video", video)
+        self.submit_mock.assert_not_called()
+        self.create_mock.assert_not_called()
+        self.update_mock.assert_not_called()
+
+    def test_invalid_video_is_rejected_before_project_or_recognition_is_started(self):
+        video = self.media("invalid-original.mp4")
+        self.video_info[video] = {"has_video": False, "has_audio": True}
+        with self.state({}, {"project": "work-a"}):
+            ctx = controller.ReferenceContext()
+            with self.assertRaisesRegex(ValueError, "有效画面"):
+                ctx.use_media("video", video)
+        self.submit_mock.assert_not_called()
+        self.update_mock.assert_not_called()
+
+    def test_pending_import_blocks_duplicate_import_without_probing_or_submitting_again(self):
+        video = self.media("once-original.mp4")
+        with self.state():
+            ctx = controller.ReferenceContext()
+            ctx.use_media("video", video)
+            with self.assertRaisesRegex(ValueError, "正在处理"):
+                ctx.use_media("video", video)
+        self.submit_mock.assert_called_once()
+        self.probe_mock.assert_called_once()
+        self.create_mock.assert_not_called()
+
+    def test_old_project_and_unbound_video_recognition_cannot_attach_to_new_project(self):
+        video = self.media("previous-project-import.mp4")
+        for project_id in ("", "work-a"):
+            with self.subTest(project=project_id), self.state({}, {"project": project_id} if project_id else {}) as (session, query):
+                ctx = controller.ReferenceContext()
+                session["ref_script_text"] = ""
+                ident = ctx.use_media("video", video)
+                self.finish_video_import(ident, video)
+                query["project"] = "work-b"
+                loaded = controller.ReferenceContext()
+                self.assertEqual(loaded.project["id"], "work-b")
+                self.assertEqual(session["ref_script_text"], "作品 B 的独立稿件。")
+                self.assertEqual(session["ref_avatar_mode"], "mixed")
+                self.assertEqual(loaded.project["config"]["source_video_path"], "")
+                self.assertNotIn("ref_imported_video", session)
+                self.assertEqual(session["ref_pending_actions"], {})
+        self.create_mock.assert_not_called()
+        self.update_mock.assert_not_called()
+
+    def test_new_empty_draft_has_a_new_scope_and_rejects_the_previous_empty_draft_result(self):
+        video = self.media("abandoned-empty-draft.mp4")
+        with self.state() as (session, query):
+            ctx = controller.ReferenceContext()
+            ident = ctx.use_media("video", video)
+            old_scope = session["ref_video_import_scope"]
+            self.finish_video_import(ident, video)
+            session["studio_pending_project"] = ""
+            loaded = controller.ReferenceContext()
+            self.assertNotEqual(session["ref_video_import_scope"], old_scope)
+            self.assertEqual(loaded.project, {})
+            self.assertEqual(session["ref_script_text"], "")
+            self.assertEqual(query, {})
+            self.assertEqual(session["ref_pending_actions"], {})
+        self.create_mock.assert_not_called()
+
+    def test_old_import_completion_preserves_new_project_attempted_upload_and_failure_state(self):
+        old_video, new_video = self.media("old-project-video.mp4"), self.media("new-project-video.mp4")
+        with self.state({}, {"project": "work-a"}) as (session, query):
+            ctx = controller.ReferenceContext()
+            session["ref_script_text"] = ""
+            ident = ctx.use_media("video", old_video)
+            query["project"] = "work-b"
+            controller.ReferenceContext()
+            failure = {"project_id": "work-b", "source_video_path": new_video, "message": "新作品自己的待处理提示"}
+            session["ref_imported_voice_video"] = new_video
+            session["ref_video_import_failure"] = deepcopy(failure)
+            self.finish_video_import(ident, old_video)
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_imported_voice_video"], new_video)
+            self.assertEqual(session["ref_video_import_failure"], failure)
+            self.assertEqual(session["ref_script_text"], "作品 B 的独立稿件。")
+            self.assertEqual(session["ref_pending_actions"], {})
+        self.create_mock.assert_not_called()
+        self.update_mock.assert_not_called()
+
+    def test_user_creating_a_project_during_empty_import_keeps_the_new_project_text(self):
+        video = self.media("pending-empty-import.mp4")
+        with self.state() as (session, _):
+            ctx = controller.ReferenceContext()
+            ident = ctx.use_media("video", video)
+            text = "用户随后明确保存的独立稿件，旧导入结果不能替换。"
+            session["ref_script_text"] = text
+            ctx.save_script(text)
+            self.finish_video_import(ident, video)
+            loaded = controller.ReferenceContext()
+            self.assertEqual(loaded.project["config"]["input_text"], text)
+            self.assertEqual(session["ref_script_text"], text)
+            self.assertEqual(loaded.project["config"]["source_video_path"], "")
+        self.create_mock.assert_called_once()
+        self.update_mock.assert_not_called()
+
+    def test_mutated_video_or_wrong_asr_source_is_not_bound(self):
+        for condition in ("changed", "different", "empty_text"):
+            with self.subTest(condition=condition), self.state() as (session, _):
+                video = self.media("untrusted-" + condition + ".mp4")
+                ctx = controller.ReferenceContext()
+                ident = ctx.use_media("video", video)
+                self.finish_video_import(ident, video)
+                session["ref_imported_voice_video"] = video
+                if condition == "changed":
+                    Path(video).write_bytes(b"the-user-replaced-this-video-after-the-job-was-queued")
+                elif condition == "different":
+                    self.job_rows[ident]["result"]["media_path"] = self.media("other-asr-source.mp4")
+                else:
+                    self.job_rows[ident]["result"]["text"] = " "
+                loaded = controller.ReferenceContext()
+                self.assertEqual(loaded.project, {})
+                self.assertEqual(session["ref_script_text"], "")
+                self.assertEqual(session["ref_pending_actions"], {})
+                self.assertTrue(session.get("ref_last_error"))
+                self.assertEqual(session["ref_imported_voice_video"], video)
+                self.assertEqual(session["ref_video_import_failure"]["source_video_path"], video)
+        self.create_mock.assert_not_called()
+        self.update_mock.assert_not_called()
+
+    def test_failed_asr_keeps_attempted_marker_and_only_explicit_retry_queues_again(self):
+        video = self.media("failed-asr-video.mp4")
+        with self.state() as (session, _):
+            ctx = controller.ReferenceContext()
+            ident = ctx.use_media("video", video)
+            session["ref_imported_voice_video"] = video
+            self.job_rows[ident] = {"state": "failed", "message": "未识别到清晰人声，请换一个视频。"}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_last_error"], "未识别到清晰人声，请换一个视频。")
+            self.assertEqual(session["ref_script_text"], "")
+            self.assertEqual(session["ref_imported_voice_video"], video)
+            self.assertEqual(session["ref_video_import_failure"]["project_id"], "")
+            self.assertEqual(session["ref_video_import_failure"]["source_video_path"], video)
+            self.assertEqual(session["ref_pending_actions"], {})
+            controller.ReferenceContext()
+            controller.ReferenceContext()
+            self.submit_mock.assert_called_once()
+            controller.ReferenceContext().use_media("video", video)
+            self.assertEqual(self.submit_mock.call_count, 2)
+            self.assertNotIn("ref_video_import_failure", session)
+        self.create_mock.assert_not_called()
+
+    def test_deferred_preferences_for_previous_project_cannot_modify_new_project_mode(self):
+        video = self.media("old-deferred-video.mp4")
+        with self.state({}, {"project": "work-a"}) as (session, query):
+            ctx = controller.ReferenceContext()
+            ctx.use_media("video", video)
+            self.assertIn("ref_media_preferences_pending", session)
+            query["project"] = "work-b"
+            loaded = controller.ReferenceContext()
+            self.assertEqual(loaded.project["id"], "work-b")
+            self.assertEqual(session["ref_avatar_mode"], "mixed")
+            self.assertEqual(loaded._form_config()["avatar_mode"], "mixed")
+            self.assertNotIn("ref_media_preferences_pending", session)
+
+    def test_one_click_pipeline_hydrates_blank_publish_fields_before_native_widgets(self):
+        app = self.app()
+        app.text_input(key="ref_publish_title").set_value("").run()
+        app.text_input(key="ref_publish_tags").set_value("").run()
+        cover = self.media("one-click-cover.png")
+        released = {"title": "本次口播首句生成的发布标题", "description": "真实成片发布说明", "hashtags": ["口播", "原创"],
+                    "cover_path": cover}
+        self.projects["work-a"]["stages"]["release"]["result"] = released
+        app.session_state["ref_pending_actions"] = {"one-click-job": {"kind": "pipeline", "project_id": "work-a", "label": "一键成片"}}
+        self.job_rows["one-click-job"] = {"state": "done", "result": deepcopy(self.projects["work-a"])}
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.text_input(key="ref_publish_title").value, released["title"])
+        self.assertEqual(app.text_input(key="ref_publish_tags").value, "#口播 #原创")
+        self.assertEqual(app.session_state["ref_publish_description"], released["description"])
+        self.assertEqual(app.session_state["ref_cover_path"], cover)
+        self.update_mock.assert_not_called()
+
+    def test_one_click_pipeline_preserves_each_nonblank_publish_edit(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            controller.ReferenceContext()
+            session.update(ref_publish_title="手工定稿标题", ref_publish_description="手工定稿正文", ref_publish_tags="#手工标签")
+            self.projects["work-a"]["stages"]["release"]["result"] = {
+                "title": "后台默认标题", "description": "后台默认正文", "hashtags": ["后台标签"],
+            }
+            self.completed(session, "pipeline", deepcopy(self.projects["work-a"]))
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_publish_title"], "手工定稿标题")
+            self.assertEqual(session["ref_publish_description"], "手工定稿正文")
+            self.assertEqual(session["ref_publish_tags"], "#手工标签")
         self.update_mock.assert_not_called()
 
 

@@ -6,11 +6,17 @@ from pathlib import Path
 
 import streamlit as st
 
-from app.services.creator import jobs, store, workflow
+from app.services.creator import extract, jobs, rendering, store, workflow
 
 
 def _file(value):
     return str(value) if value and Path(str(value)).is_file() else ""
+
+
+def _media_stamp(path):
+    source = Path(path).expanduser().resolve()
+    stat = source.stat()
+    return [str(source), stat.st_size, stat.st_mtime_ns]
 
 
 def _defaults(project):
@@ -33,6 +39,7 @@ def _defaults(project):
         "ref_publish_tags": " ".join(config.get("hashtags", [])),
         "ref_publish_description": config.get("description", ""), "ref_cover_path": "",
         "ref_word_count": 300, "ref_sidebar_view": "首页", "ref_theme": "light",
+        "ref_creation_mode": "one_click",
         "ref_pending_actions": {}, "ref_last_message": "",
     }
 
@@ -56,17 +63,21 @@ class ReferenceContext:
         self.project = self.project or {}
         st.session_state["ref_current_project"] = self.project.get("id", "")
         marker = self.project.get("id", "")
-        changed = st.session_state.get("ref_loaded_project") != marker
+        changed = st.session_state.get("ref_loaded_project") != marker or pending == ""
+        if changed or "ref_video_import_scope" not in st.session_state:
+            st.session_state["ref_video_import_scope"] = store.new_id()
         values = _defaults(self.project)
         persistent = {"ref_pending_actions", "ref_theme", "ref_sidebar_view", "ref_last_message"}
         for key, value in values.items():
             if key not in st.session_state or changed and key not in persistent:
                 st.session_state[key] = value
         if changed:
-            for key in ("ref_voice_audio_result", "ref_imported_video", "ref_imported_voice_video", "ref_audio_history"):
+            for key in ("ref_voice_audio_result", "ref_imported_video", "ref_imported_voice_video", "ref_audio_history",
+                        "ref_media_preferences_pending", "ref_video_import_failure"):
                 st.session_state.pop(key, None)
         st.session_state["ref_loaded_project"] = marker
         self._consume_completed()
+        self._apply_media_preferences()
 
     def stage(self, name):
         return dict(self.project.get("stages", {}).get(name, {}).get("result", {}))
@@ -83,7 +94,7 @@ class ReferenceContext:
 
     def _form_config(self):
         tags = str(st.session_state.get("ref_publish_tags", "")).replace("，", " ").replace(",", " ").split()
-        return {
+        config = {
             "input_mode": "script", "input_text": str(st.session_state.get("ref_script_text", "")).strip(),
             "voice_id": st.session_state.get("ref_voice_id") or "edge:zh-CN-XiaoxiaoNeural",
             "speed": st.session_state.get("ref_speed", 1.0),
@@ -97,6 +108,27 @@ class ReferenceContext:
             "description": str(st.session_state.get("ref_publish_description", "")).strip(),
             "hashtags": [tag.lstrip("#") for tag in tags[:20]],
         }
+        if self._pending_media_preferences():
+            # The import may run after this event's radio was already rendered.
+            # Keep its old mixed value from undoing the saved full-video choice.
+            config.update(kind="avatar", avatar_mode="full", allow_reference_reuse=False)
+        return config
+
+    def _pending_media_preferences(self):
+        pending = st.session_state.get("ref_media_preferences_pending")
+        if not isinstance(pending, dict) or pending.get("project_id") != self.project.get("id"):
+            return None
+        source = self.project.get("config", {}).get("source_video_path")
+        if not source or str(Path(source).resolve()) != pending.get("source_video_path"):
+            return None
+        return pending
+
+    def _apply_media_preferences(self):
+        pending = self._pending_media_preferences()
+        st.session_state.pop("ref_media_preferences_pending", None)
+        if pending:
+            for key, value in pending["preferences"].items():
+                st.session_state[key] = value
 
     def _ensure_project(self, changes=None):
         config = self._form_config()
@@ -168,10 +200,81 @@ class ReferenceContext:
             self._ensure_project({"audio_path": path, "source_video_path": ""})
             st.session_state["ref_voice_audio_result"] = {"audio_path": path}
         elif kind == "video":
-            self._ensure_project({"source_video_path": path})
-            st.session_state["ref_imported_video"] = path
+            if self.busy:
+                raise ValueError("当前任务正在处理，请完成后再继续导入。")
+            info = rendering.probe_source(path)
+            if not info.get("has_video"):
+                raise ValueError("请选择包含有效画面的口播视频。")
+            path = str(Path(path).expanduser().resolve())
+            st.session_state.pop("ref_video_import_failure", None)
+            if str(st.session_state.get("ref_script_text", "")).strip():
+                self._bind_imported_video(path, info)
+            elif info.get("has_audio"):
+                stamp = _media_stamp(path)
+                scope = st.session_state["ref_video_import_scope"]
+                config = self.project.get("config", {})
+                ident = self.queue("video_import_extract", "识别导入口播视频", extract.extract_media, path,
+                                   language=config.get("language", "zh"), model_size=config.get("model_size", "small"))
+                st.session_state["ref_pending_actions"][ident].update(
+                    source_video_path=path, media_stamp=stamp, import_scope=scope,
+                    input_text=str(st.session_state.get("ref_script_text", "")))
+                return ident
+            else:
+                raise ValueError("这段视频没有声音，也没有口播文案。请先填写文案并准备配音，或导入带声口播视频。")
         else:
             self._ensure_project({"materials": [*self.project.get("config", {}).get("materials", []), path]})
+
+    def _bind_imported_video(self, path, info, text=None):
+        changes = {"source_video_path": path, "kind": "avatar", "avatar_mode": "full", "allow_reference_reuse": False}
+        if info.get("has_audio"):
+            changes["audio_path"] = ""
+        if text is not None:
+            changes.update(input_mode="script", input_text=text)
+        self._ensure_project(changes)
+        st.session_state.pop("ref_voice_audio_result", None)
+        st.session_state["ref_cover_path"] = ""
+        st.session_state["ref_imported_video"] = path
+        st.session_state["ref_imported_voice_video"] = path
+        st.session_state["ref_media_preferences_pending"] = {
+            "project_id": self.project["id"], "source_video_path": path,
+            "preferences": {"ref_avatar_mode": "full", "ref_allow_reference_reuse": False},
+        }
+
+    def _consume_video_import(self, meta, job):
+        if (meta.get("project_id", "") != self.project.get("id", "")
+                or meta.get("import_scope") != st.session_state.get("ref_video_import_scope")):
+            return
+        st.session_state["ref_last_message"] = meta["label"] + " · " + job.get("message", "")
+        path = meta.get("source_video_path", "")
+        try:
+            if job.get("state") != "done":
+                raise ValueError(job.get("message") or "导入文案识别未完成，请检查声音后重新导入。")
+            if str(st.session_state.get("ref_script_text", "")) != meta.get("input_text", ""):
+                raise ValueError("文案已修改，导入识别结果没有覆盖当前内容。请核对后重新导入视频。")
+            result = job.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("text"), str) or not result["text"].strip():
+                raise ValueError("未识别到可用口播。请填写文案或导入有清晰人声的视频。")
+            if not isinstance(result.get("media_path"), str) or not result["media_path"] or str(Path(result["media_path"]).resolve()) != path:
+                raise ValueError("识别结果与导入的视频不一致，请重新导入。")
+            if not _file(path):
+                raise ValueError("视频已移动或删除，请重新导入。")
+            if _media_stamp(path) != meta.get("media_stamp"):
+                raise ValueError("视频在识别期间已改动，请重新导入。")
+            info = rendering.probe_source(path)
+            if not info.get("has_video") or not info.get("has_audio"):
+                raise ValueError("导入的视频已无法读取完整画面和声音，请重新导入。")
+            text = result["text"].strip()
+            self._bind_imported_video(path, info, text=text)
+            st.session_state["ref_original_text"] = text
+            st.session_state["ref_script_text"] = text
+        except (ValueError, OSError) as exc:
+            # Retain the attempted-upload marker. The uploader keeps its file
+            # across reruns, so clearing it would silently queue ASR forever.
+            st.session_state["ref_imported_voice_video"] = path
+            st.session_state["ref_video_import_failure"] = {
+                "project_id": self.project.get("id", ""), "source_video_path": path, "message": str(exc),
+            }
+            st.session_state["ref_last_error"] = str(exc)
 
     def current_audio(self):
         return (_file(st.session_state.get("ref_voice_audio_result", {}).get("audio_path"))
@@ -207,6 +310,9 @@ class ReferenceContext:
             if not job or job.get("state") in {"queued", "running"}:
                 continue
             del pending[ident]
+            if meta["kind"] == "video_import_extract":
+                self._consume_video_import(meta, job)
+                continue
             st.session_state["ref_last_message"] = meta["label"] + " · " + job.get("message", "")
             if job.get("state") != "done":
                 st.session_state["ref_last_error"] = job.get("message", "处理未完成")
@@ -232,8 +338,17 @@ class ReferenceContext:
                 st.session_state["ref_publish_description"] = result.get("description", "")
             elif kind == "pipeline":
                 self.project = workflow.get_project(self.project["id"]) or self.project
-                if self.stage("release").get("cover_path"):
-                    st.session_state["ref_cover_path"] = self.stage("release")["cover_path"]
+                released = self.stage("release")
+                if released.get("cover_path"):
+                    st.session_state["ref_cover_path"] = released["cover_path"]
+                fields = {
+                    "ref_publish_title": released.get("title", ""),
+                    "ref_publish_description": released.get("description", ""),
+                    "ref_publish_tags": " ".join("#" + tag.lstrip("#") for tag in released.get("hashtags", [])),
+                }
+                for key, value in fields.items():
+                    if not str(st.session_state.get(key, "")).strip():
+                        st.session_state[key] = value
         st.session_state["ref_pending_actions"] = pending
 
 
