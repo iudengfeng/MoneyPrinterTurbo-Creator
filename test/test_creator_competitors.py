@@ -118,6 +118,15 @@ class CompetitorTests(unittest.TestCase):
                 competitors.save_settings(changes)
         self.assertEqual([], competitors.get_settings()["sources"])
 
+    def test_copied_share_message_extracts_the_url_and_preserves_public_url_checks(self):
+        message = "3- 长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/Q-5ymQDjDBA/ 3@1.com :9pm"
+        self.assertEqual(competitors.normalize_source_link(message), "https://v.douyin.com/Q-5ymQDjDBA/")
+        self.assertEqual(competitors.normalize_source_link("看看这条：https://example.org/post?a=1&b=2。"), "https://example.org/post?a=1&b=2")
+        for value in ("没有网址的分享文字", "两个 https://example.org/a https://example.org/b", "复制 http://127.0.0.1:8501",
+                      "分享 https://u:p@example.org/a", "分享 https://example.org/video.mp4"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                competitors.normalize_source_link(value)
+
     def test_metadata_is_actual_excerpt_and_missing_data_is_not_zero(self):
         items = competitors.parse_public_page(page('<title>教育案例</title><meta name="description" content="实际公开摘要"><meta name="author" content="作者甲">'), {"industry": "教育"})
         self.assertEqual("教育案例", items[0]["title"])

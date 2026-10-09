@@ -161,19 +161,31 @@ def _reference_library(ctx, *, prefix="ref_library"):
 
 def _account_profile(ctx):
     from app.services.creator import competitors
-    with st.expander("主页链接学习", expanded=False):
-        homepage = st.text_input("参考博主的公开主页或作品列表", key="ref_ip_homepage", max_chars=2000)
+    with st.expander("主页链接学习", expanded=bool(st.session_state.get("ref_ip_result"))):
+        homepage = st.text_input("参考博主的公开主页或作品列表", key="ref_ip_homepage", max_chars=5000,
+                                 placeholder="可直接粘贴抖音等平台的整段分享文字")
+        if homepage.strip():
+            try:
+                st.caption("识别到链接：" + competitors.normalize_source_link(homepage))
+            except ValueError:
+                pass
         st.caption("读取可访问的公开正文并加入参考库。登录限制或未公开完整口播时，可导入作品分享链接、本地视频或自己提供的原文。")
         if st.button("读取公开内容", key="ref_ip_collect", type="primary", disabled=_busy(ctx) or not homepage.strip()):
             try:
+                source_url = competitors.normalize_source_link(homepage)
                 settings = competitors.get_settings()
                 sources = settings["sources"]
-                if not any((item if isinstance(item, str) else item.get("url")) == homepage.strip() for item in sources):
-                    competitors.save_settings({"sources": [*sources, {"url": homepage.strip()}]})
-                if _submit(ctx, "ip_collect", "读取公开参考内容", competitors.collect_once):
+                if not any((item if isinstance(item, str) else item.get("url")) == source_url for item in sources):
+                    competitors.save_settings({"sources": [*sources, {"url": source_url}]})
+                if _submit(ctx, "ip_collect", "读取公开参考内容", competitors.collect_selection, source_urls=[source_url]):
                     _close_dialog()
             except Exception as exc:
                 st.error(str(exc))
+        result = st.session_state.get("ref_ip_result")
+        if isinstance(result, dict):
+            getattr(st, "success" if result.get("status") == "done" else "warning")(result.get("message", "采集结束"))
+            for error in result.get("errors", []):
+                st.caption(error.get("message", "来源未能读取"))
     rows = topics.list_accounts()
     names = {row["id"]: row["name"] for row in rows}
     options = [None, *names]
@@ -244,7 +256,7 @@ def _library_dialog(ctx):
                                     key="ref_viral_platform", disabled=_busy(ctx), persist_state="session")
         with st.expander("指定公开来源（可选）"):
             links = st.text_area("作品、主页或公开内容页面链接", key="ref_viral_urls", height=90, max_chars=5000,
-                                 placeholder="每行一条，最多5条。留空则尝试平台关键词搜索。", disabled=_busy(ctx), persist_state="session")
+                                 placeholder="每行一条网址或完整分享文字，最多5条。留空则尝试平台关键词搜索。", disabled=_busy(ctx), persist_state="session")
         ready = competitors.dependency_ready()
         st.caption("公开内容采集引擎已就绪" if ready else "Scrapling 未就绪，请在运行环境中准备采集组件。")
         if st.button("Scrapling 采集", key="ref_viral_collect", type="primary", width="stretch", disabled=_busy(ctx) or not ready):

@@ -167,6 +167,20 @@ class ReferenceScriptTests(unittest.TestCase):
         fetch.assert_not_called()
         self.model.assert_not_called()
 
+    def test_ip_learning_accepts_a_whole_douyin_share_message_and_saves_only_the_url(self):
+        app = self.app()
+        app.session_state["ref_learning_mode"] = "IP学习"
+        app.run()
+        message = "3- 长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/Q-5ymQDjDBA/ 3@1.com :9pm"
+        app.text_input(key="ref_ip_homepage").set_value(message).run()
+        app.button(key="ref_ip_collect").click().run()
+        self.assertFalse(app.exception)
+        job = app.session_state["ref_test_queue"]
+        self.assertEqual(job["operation"], "app.services.creator.competitors.collect_selection")
+        self.assertEqual(job["kwargs"]["source_urls"], ["https://v.douyin.com/Q-5ymQDjDBA/"])
+        self.assertEqual(column.competitors.get_settings()["sources"][0]["url"], "https://v.douyin.com/Q-5ymQDjDBA/")
+        self.assertEqual(app.text_area(key="ref_script_text").value, "")
+
     def test_viral_library_keeps_missing_engine_and_empty_query_explicit(self):
         with patch.object(column.competitors, "dependency_ready", return_value=False):
             app = self.app()

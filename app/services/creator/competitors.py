@@ -94,6 +94,19 @@ def _url(value, *, resolve=False):
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
 
 
+def normalize_source_link(value):
+    """Extract one public URL from a platform's copied sharing message."""
+    if not isinstance(value, str) or len(value) > 10000:
+        raise ValueError("分享内容过长，请单独粘贴链接或缩短分享文字。")
+    matches = re.findall(r"https?://[^\s<>\"'，。！？；（）【】「」]+", value, re.I)
+    urls = list(dict.fromkeys(match.rstrip(".,;!)]}）】」") for match in matches))
+    if not urls:
+        raise ValueError("没有识别到 HTTP/HTTPS 链接，请粘贴完整的平台分享内容或公开网址。")
+    if len(urls) != 1:
+        raise ValueError("这段内容包含多个链接，请每行填写一条分享内容或网址。")
+    return _url(urls[0])
+
+
 def get_settings():
     saved = store.get_record(_SETTINGS, "default") or {}
     return {**_DEFAULTS, **saved}
@@ -904,9 +917,14 @@ def collect_selection(keyword="", source_urls=None, platform="douyin", progress=
                                    or any(not isinstance(url, str) for url in source_urls)):
         raise ValueError("一次最多填写 5 个公开来源链接。")
     settings = json.loads(json.dumps(get_settings(), ensure_ascii=False))
-    urls = [url.strip() for url in (source_urls or []) if url.strip()]
+    urls = [normalize_source_link(url) for url in (source_urls or []) if url.strip()]
     if urls:
-        sources = [{"url": _url(url), "keyword": keyword.strip()} for url in dict.fromkeys(urls)]
+        sources = []
+        for url in dict.fromkeys(urls):
+            host = (urlsplit(url).hostname or "").lower()
+            dynamic = any(host == domain or host.endswith("."+domain) for domain in
+                          ("douyin.com", "xiaohongshu.com", "xhslink.com", "bilibili.com", "b23.tv"))
+            sources.append({"url": _url(url), "keyword": keyword.strip(), "browser_render": dynamic})
     elif keyword.strip():
         sources = [{"url": templates[platform].format(keyword=quote(keyword.strip(), safe="")), "keyword": keyword.strip(), "browser_render": True}]
     else:
