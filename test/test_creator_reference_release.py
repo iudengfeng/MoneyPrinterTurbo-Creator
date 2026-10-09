@@ -57,6 +57,9 @@ class ReferenceReleaseTests(unittest.TestCase):
 from webui.creator_reference_release import render
 class Context:
     project = {}
+    @property
+    def busy(self):
+        return st.session_state.get("test_busy", False)
     def stage(self, name):
         return {"text": st.session_state.get("test_script", "这是本次视频的真实口播文案，用于生成准确的标题和标签。")}
     def current_video(self, rendered=True):
@@ -68,6 +71,8 @@ class Context:
         st.session_state["test_queued"] = {"kind": kind, "title": title, "args": args, "kwargs": kwargs}
     def submit_stage(self, name, changes):
         st.session_state["test_submission"] = {"stage": name, "changes": changes}
+    def _ensure_project(self, changes=None):
+        st.session_state["test_settings_saved"] = changes
     def open_tool(self, name):
         st.session_state["test_open_tool"] = name
 render(Context())
@@ -90,6 +95,22 @@ render(Context())
             app.checkbox(key="ref_publish_xiaohongshu").check().run()
             app.selectbox(key="ref_publish_account_xiaohongshu").select("xhs-one").run()
         return app
+
+    def test_cover_settings_save_does_not_start_a_pipeline_or_paid_call(self):
+        app = self.app(ref_script_text="本次需要保存封面设置的真实口播正文。")
+        app.button(key="ref_cover_settings").click().run()
+        app.text_input(key="ref_cover_title").set_value("单独封面标题").run()
+        app.button(key="ref_cover_settings_save").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["test_settings_saved"]["cover_title"], "单独封面标题")
+        self.assertNotIn("test_submission", app.session_state)
+        self.assertNotIn("test_queued", app.session_state)
+
+    def test_active_generation_disables_new_copy_cover_and_publish_requests(self):
+        app = self.app(test_busy=True)
+        for key in ("ref_cover_generate", "ref_cover_settings", "ref_publish_generate_copy", "ref_publish_open"):
+            self.assertTrue(app.button(key=key).disabled)
+        self.prepare_mock.assert_not_called()
 
     def test_empty_column_has_four_truthful_platforms_without_preparing_or_uploading(self):
         app = self.app(current=False)

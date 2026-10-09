@@ -2,22 +2,39 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
+import math
 from pathlib import Path
 
 import streamlit as st
 
 from app.services.creator import media_library, processing
+from webui.creator_reference_state import _media_stamp
 
 POSITION_NAMES = {"top-left": "左上", "top-center": "上中", "top-right": "右上", "middle-left": "左中",
                   "center": "居中", "middle-right": "右中", "bottom-left": "左下", "bottom-center": "下中", "bottom-right": "右下"}
 
 
-def timed_rows(ctx):
+def voice_timeline(ctx):
     voice = ctx.stage("voice")
+    if not voice.get("segments"):
+        cached = st.session_state.get("ref_imported_transcript", {})
+        source = ctx.project.get("config", {}).get("source_video_path", "")
+        try:
+            if source and cached.get("project_id") == ctx.project.get("id") and cached.get("media_stamp") == _media_stamp(source):
+                voice = cached
+        except OSError:
+            pass
+    return voice
+
+
+def timed_rows(ctx):
+    voice = voice_timeline(ctx)
     rows = voice.get("segments") or []
     return [row for row in rows if isinstance(row, dict) and row.get("text") and
             isinstance(row.get("start"), (int, float)) and isinstance(row.get("end"), (int, float)) and
-            0 <= row["start"] < row["end"]]
+            math.isfinite(row["start"]) and math.isfinite(row["end"]) and 0 <= row["start"] < row["end"]]
 
 
 def _library():
@@ -47,20 +64,29 @@ def _library():
 
 def _dismiss():
     st.session_state["ref_pip_open"] = False
+    key = st.session_state.pop("ref_pip_active_draft", None)
+    if key:
+        st.session_state.pop(key, None)
 
 
 @st.dialog("画中画设置", width="large", on_dismiss=_dismiss)
 def render_dialog(ctx):
     ident = ctx.project.get("id", "draft")
+    rows = timed_rows(ctx)
+    duration = float(voice_timeline(ctx).get("duration", 0))
+    stamp = hashlib.sha256(json.dumps([rows, duration], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+    ident += "_" + stamp
     key = "ref_pip_draft_" + ident
+    previous = st.session_state.get("ref_pip_active_draft")
+    if previous and previous != key:
+        st.session_state.pop(previous, None)
+    st.session_state["ref_pip_active_draft"] = key
     st.session_state.setdefault(key, deepcopy(ctx.project.get("config", {}).get("pip_items", [])))
     draft = st.session_state[key]
     setup, library = st.tabs(["精准文字画中画", "素材库"])
     with library:
         _library()
     with setup, st.container(key="ref_pip_dialog"):
-        rows = timed_rows(ctx)
-        duration = float(ctx.stage("voice").get("duration", 0))
         if not rows or duration <= 0:
             st.info("请先完成配音和口播生成，再按真实音轨时间设置画中画。")
             return
@@ -77,7 +103,7 @@ def render_dialog(ctx):
         last_index = second.selectbox("结束段（可合并连续段落）", range(first_index, len(rows)), format_func=lambda i: f"{i+1:02d} · {rows[i]['end']:.1f}s · {rows[i]['text'][:32]}", key=end_key)
         st.text("\n".join(row["text"] for row in rows[first_index:last_index+1]))
         material_id = st.selectbox("选择素材", list(by_id), format_func=lambda i: by_id[i]["label"], index=None, key="ref_pip_choose_" + ident)
-        if material_id:
+        if material_id in by_id:
             selected = by_id[material_id]
             st.image(selected["thumbnail_path"], width=180)
         a, b, c = st.columns(3)
@@ -88,7 +114,7 @@ def render_dialog(ctx):
         a, b = st.columns(2)
         start = a.number_input("开始时间（秒）", 0., duration, float(rows[first_index]["start"]), .1, key=f"ref_pip_time_start_{ident}_{first_index}")
         end = b.number_input("结束时间（秒）", 0., duration, min(duration, float(rows[last_index]["end"])), .1, key=f"ref_pip_time_end_{ident}_{last_index}")
-        if st.button("添加这一段", key="ref_pip_add_segment", type="primary", disabled=not material_id or len(draft) >= 32):
+        if st.button("添加这一段", key="ref_pip_add_segment", type="primary", disabled=ctx.busy or not material_id or len(draft) >= 32):
             try:
                 item = {"path": by_id[material_id]["path"], "start": start, "end": end, "mode": mode, "position": position, "size": size, "padding": gap}
                 items = processing.normalize({"pip_items": [*draft, item]})["pip_items"]
@@ -106,8 +132,24 @@ def render_dialog(ctx):
                 if remove.button("删除", key=f"ref_pip_remove_{ident}_{i}"):
                     st.session_state[key] = [row for j, row in enumerate(draft) if j != i]
                     st.rerun(scope="app")
+                with st.expander("调整这一段", expanded=False):
+                    item_key = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:10] + str(i)
+                    left, right = st.columns(2)
+                    edit_start = left.number_input("开始（秒）", 0., duration, min(duration, float(item["start"])), .1, key="ref_pip_edit_start_"+item_key)
+                    edit_end = right.number_input("结束（秒）", 0., duration, min(duration, float(item["end"])), .1, key="ref_pip_edit_end_"+item_key)
+                    edit_position = st.selectbox("窗口位置", list(POSITION_NAMES), index=list(POSITION_NAMES).index(item["position"]), format_func=POSITION_NAMES.get, key="ref_pip_edit_position_"+item_key)
+                    if st.button("应用调整", key="ref_pip_edit_apply_"+item_key, disabled=ctx.busy):
+                        try:
+                            changed = dict(item, start=edit_start, end=edit_end, position=edit_position)
+                            st.session_state[key] = processing.normalize({"pip_items": [changed if j == i else row for j, row in enumerate(draft)]})["pip_items"]
+                            st.rerun(scope="app")
+                        except ValueError as exc:
+                            st.error(str(exc))
         st.caption("素材只替换或覆盖画面，保留完整口播声音；视频素材不足时停留在末帧。")
-        if st.button("保存画中画", key="ref_pip_save", type="primary", disabled=ctx.busy):
+        invalid = any(row["end"] > duration+.05 or not Path(row["path"]).is_file() for row in draft)
+        if invalid:
+            st.warning("部分素材已缺失或时段超出当前配音，请调整或删除后保存。")
+        if st.button("保存画中画", key="ref_pip_save", type="primary", disabled=ctx.busy or invalid):
             try:
                 ctx._ensure_project({"pip_items": draft})
                 st.session_state["ref_pip_items_pending"] = {"project_id": ctx.project["id"], "items": deepcopy(draft)}

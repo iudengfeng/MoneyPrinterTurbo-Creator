@@ -92,7 +92,11 @@ def _sidebar(ctx):
                   width="stretch", on_click=_switch_factory)
 
 
-def _header(settings_callback=None):
+def _new_project():
+    st.session_state["studio_pending_project"] = ""
+
+
+def _header(settings_callback=None, ctx=None):
     with st.container(key="ref_topbar"):
         brand, actions = st.columns([5, 2], vertical_alignment="center", gap="small")
         with brand:
@@ -101,6 +105,8 @@ def _header(settings_callback=None):
                         '<span class="ref-agent">AI Agent</span></div>', unsafe_allow_html=True)
         with actions:
             with st.container(key="ref_header_actions", horizontal=True, horizontal_alignment="right", gap="small"):
+                st.button("新建", key="ref_new_project", icon=":material/add:", on_click=_new_project,
+                          disabled=bool(ctx and ctx.busy), help="保存已有作品，开始新的创作")
                 if st.button("任务", key="ref_header_tasks", icon=":material/checklist:", help="查看当前制作进度"):
                     st.session_state["ref_active_tool"] = "任务"
                 if settings_callback:
@@ -168,7 +174,7 @@ def render(settings_callback=None):
     if st.session_state["ref_theme"] == "dark":
         st.markdown('<style>' + DARK_THEME_CSS + '</style>', unsafe_allow_html=True)
     _sidebar(ctx)
-    _header(settings_callback)
+    _header(settings_callback, ctx)
     with st.container(key="reference_workbench"):
         if error := st.session_state.pop("ref_last_error", None):
             st.error(error)
@@ -184,6 +190,17 @@ def render(settings_callback=None):
                         number, title, subtitle = heading
                         st.markdown(f'<div class="ref-step-heading"><span class="ref-step-number">{number}</span>'
                                     f'<div><strong>{title}</strong><small>{subtitle}</small></div></div>', unsafe_allow_html=True)
+                        state = ctx.project.get("state", "draft")
+                        if state in {"queued", "running"}:
+                            st.caption("正在制作 · " + ctx.project.get("message", ""))
+                        elif slug == "script":
+                            st.caption("文案已保存" if ctx.project.get("config", {}).get("input_text") else "先导入原文或填写文案")
+                        elif slug == "voice":
+                            st.caption("配音已就绪 · 可继续制作画面" if ctx.current_audio() else "选择声音，生成或导入配音")
+                        elif slug == "processing":
+                            st.caption("成片已生成 · 可预览或导出" if ctx.current_video(rendered=True) else "设置包装后生成成片")
+                        else:
+                            st.caption("封面已就绪 · 发布前核对文案与账号" if ctx.current_cover() else "先完成视频，再准备发布资料")
                         renderer(ctx)
         else:
             _auxiliary(ctx, st.session_state["ref_sidebar_view"], settings_callback)

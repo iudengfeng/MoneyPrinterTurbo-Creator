@@ -384,7 +384,8 @@ _expanded_video(st.session_state['test_path'], rendered=True)
         self.assertFalse(self.context.media)
         app.selectbox(key="ref_audio_history").set_value("voice-history").run()
         app.button(key="ref_use_audio_history").click().run()
-        self.assertEqual(self.context.media, [("audio", audio)])
+        self.assertEqual(app.session_state["ref_audio_choice_pending"], {"project_id": self.context.project.get("id", ""), "audio_path": audio, "text": "历史文案"})
+        self.assertFalse(self.context.media)
 
     def test_independent_audio_job_blocks_overlapping_generation_and_settings(self):
         self.context.busy = True

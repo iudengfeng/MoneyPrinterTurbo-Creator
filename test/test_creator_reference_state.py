@@ -635,6 +635,83 @@ if st.button('导入原片', key='test_import_video'):
             self.assertEqual(session["ref_script_text"], "用户已经重新修改")
         self.update_mock.assert_not_called()
 
+    def test_saving_preserves_subtitle_color_fit_and_cover_preferences(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            ctx = controller.ReferenceContext()
+            session.update(ref_subtitle_style="yellow", ref_color_grade="warm", ref_video_fit="contain", ref_bgm_volume=.23,
+                           ref_cover_title="独立封面文案", ref_cover_style="bold", ref_cover_aspect="1:1", ref_cover_frame_time=1.5)
+            ctx.save_script("这是一份修改后保存的真实文案。")
+            config = ctx.project["config"]
+            self.assertEqual(config["subtitle_style"], "yellow")
+            self.assertEqual((config["color_grade"], config["video_fit"], config["bgm_volume"]), ("warm", "contain", .23))
+            self.assertEqual((config["cover_title"], config["cover_aspect"], config["cover_frame_time"]), ("独立封面文案", "1:1", 1.5))
+
+    def test_cover_cancellation_restores_preferences_and_review_does_not_open_over_tasks(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            controller.ReferenceContext()
+            session["ref_cover_title"] = "未确认的临时修改"
+            session["ref_cover_cancel_pending"] = {"project_id": "work-a", "values": {"ref_cover_title": "原封面标题"}}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_cover_title"], "原封面标题")
+            session["ref_active_tool"] = "任务"
+            self.completed(session, "script_review", {"source_text": session["ref_script_text"], "optimized_text": session["ref_script_text"], "risks": []})
+            controller.ReferenceContext()
+            self.assertFalse(session["ref_script_review_open"])
+            self.assertIn("ref_script_review_result", session)
+
+    def test_cover_completion_is_rejected_when_its_video_changes(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            old_video, new_video = self.media("old-output.mp4"), self.media("new-output.mp4")
+            self.projects["work-a"]["stages"]["render"]["result"] = {"video_path": old_video}
+            ctx = controller.ReferenceContext()
+            ident = ctx.queue("cover", "封面", lambda *args: None, old_video, "标题")
+            self.projects["work-a"]["stages"]["render"]["result"] = {"video_path": new_video}
+            self.job_rows[ident] = {"state": "done", "result": {"cover_path": self.media("old-output-cover.png")}}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_cover_path"], "")
+
+    def test_missing_job_record_is_removed_without_repeating_the_operation(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            controller.ReferenceContext()
+            session["ref_pending_actions"] = {"removed": {"kind": "voice_audio", "project_id": "work-a", "label": "旧任务"}}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_pending_actions"], {})
+        self.submit_mock.assert_not_called()
+
+    def test_history_audio_restores_its_corresponding_text_before_widgets(self):
+        app = self.app()
+        audio = self.media("history-version.wav")
+        app.session_state["ref_audio_choice_pending"] = {"project_id": "work-a", "audio_path": audio, "text": "音轨对应的历史正文。"}
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.text_area(key="ref_script_text").value, "音轨对应的历史正文。")
+        self.assertEqual(self.projects["work-a"]["config"]["audio_path"], audio)
+
+    def test_async_copy_preserves_later_edits_and_old_project_errors_are_ignored(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            ctx = controller.ReferenceContext()
+            ident = ctx.queue("publish_copy", "标题", lambda: None)
+            session["ref_publish_title"] = "我刚修改的标题"
+            self.job_rows[ident] = {"state": "done", "result": {"title": "AI标题", "tags": ["新标签"], "description": "新正文"}}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_publish_title"], "我刚修改的标题")
+            self.assertEqual(session["ref_publish_tags"], "新标签")
+            session["ref_pending_actions"] = {"foreign": {"kind": "voice_audio", "project_id": "work-b", "label": "旧任务"}}
+            self.job_rows["foreign"] = {"state": "failed", "message": "别的作品错误"}
+            controller.ReferenceContext()
+            self.assertNotEqual(session.get("ref_last_error"), "别的作品错误")
+
+    def test_import_recognition_retains_real_timeline_for_pip_without_faking_checkpoint(self):
+        with self.state({}, {}) as (session, _):
+            ctx = controller.ReferenceContext()
+            video = self.media("incoming-timeline.mp4")
+            ident = ctx.use_media("video", video)
+            self.finish_video_import(ident, video)
+            loaded = controller.ReferenceContext()
+            self.assertEqual(session["ref_imported_transcript"]["project_id"], loaded.project["id"])
+            self.assertEqual(session["ref_imported_transcript"]["segments"][0]["start"], 0.)
+            self.assertEqual(loaded.stage("voice"), {})
+
     def test_scrapling_collection_shows_result_without_overwriting_the_manuscript(self):
         with self.state({}, {"project": "work-a"}) as (session, _):
             controller.ReferenceContext()

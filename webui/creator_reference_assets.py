@@ -39,10 +39,18 @@ def _voice_sample(ctx, upload):
     source = Path(ctx.stage_upload(upload))
     extract.probe_media(source)
     target = source.with_name(source.stem + "-sample.wav")
-    if not target.is_file():
+    valid = False
+    if target.is_file():
+        try:
+            voices._wav_valid(target)
+            valid = True
+        except ValueError:
+            pass
+    if not valid:
         response = extract._run([extract.ffmpeg_binary(), "-v", "error", "-nostdin", "-y", "-i", str(source),
                                  "-t", "30", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(target)])
         if response.returncode:
+            target.unlink(missing_ok=True)
             raise ValueError("样音提取失败，请上传清晰音频或带声音的视频。")
     voices._wav_valid(target)
     return str(target)
@@ -66,6 +74,10 @@ def voice_browser(ctx):
     with clone:
         st.caption("上传自己有权使用的清晰录音或有声视频；视频提取前 30 秒作为样音。")
         upload = st.file_uploader("上传样音／视频", type=["wav", "mp3", "m4a", "ogg", "mp4", "mov"], key="ref_clone_upload_"+st.session_state.get("ref_video_import_scope", "draft"), disabled=ctx.busy)
+        recording = st.audio_input("录制自己的样音", key="ref_clone_record_"+st.session_state.get("ref_video_import_scope", "draft"), disabled=ctx.busy)
+        if recording:
+            if not upload or st.radio("使用哪份样音", ["录制", "上传"], horizontal=True, key="ref_clone_source") == "录制":
+                upload = recording
         name = st.text_input("音色名称", key="ref_clone_name", max_chars=80)
         transcript = st.text_area("样音说了什么（可选）", key="ref_clone_transcript", height=90)
         mode = st.radio("克隆方式", ["voxcpm", "archive"], format_func=lambda x: "VoxCPM 云端克隆" if x == "voxcpm" else "本机样音存档", horizontal=True, key="ref_clone_mode")

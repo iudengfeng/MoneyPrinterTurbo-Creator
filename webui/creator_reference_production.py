@@ -130,8 +130,13 @@ def _audio_history(ctx, rows):
             if selected:
                 row = by_id[selected]
                 st.audio(row["audio_path"])
-                if st.button("使用这份语音", key="ref_use_audio_history", width="stretch", disabled=_busy(ctx)):
-                    _attempt(ctx.use_media, "audio", row["audio_path"])
+                changed = row.get("text", "").strip() != st.session_state.get("ref_script_text", "").strip()
+                if changed:
+                    st.caption("这份配音对应另一篇文案，选用时会一起载入对应正文。")
+                    st.text(row.get("text", ""))
+                if st.button("使用配音及对应文案" if changed else "使用这份语音", key="ref_use_audio_history", width="stretch", disabled=_busy(ctx)):
+                    st.session_state["ref_audio_choice_pending"] = {"project_id": ctx.project.get("id", ""), "audio_path": row["audio_path"], "text": row.get("text", "")}
+                    st.rerun()
 
 
 @st.dialog("视频预览", width="large", on_dismiss="rerun")

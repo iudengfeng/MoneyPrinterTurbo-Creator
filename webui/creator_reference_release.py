@@ -23,6 +23,17 @@ def _config_snapshot():
     return deepcopy(config.snapshot_config_with_pending(config.app))
 
 
+def _busy(ctx):
+    return bool(getattr(ctx, "busy", False)) or (getattr(ctx, "project", {}) or {}).get("state") in {"queued", "running"}
+
+
+def _queue(ctx, *args, **kwargs):
+    try:
+        ctx.queue(*args, **kwargs)
+    except Exception as exc:
+        st.error(str(exc))
+
+
 def _generate_copy(text, progress=None, app_config=None):
     result = release_assets.generate_metadata(text, count=3, progress=progress, app_config=app_config)
     return dict(result, title=result["titles"][0],
@@ -130,7 +141,14 @@ def _open_accounts(ctx):
         ctx.open_tool("发布中心")
 
 
-@st.dialog("封面设置")
+def _dismiss_cover_settings():
+    snapshot = st.session_state.pop("ref_cover_settings_before", None)
+    if snapshot:
+        st.session_state["ref_cover_cancel_pending"] = snapshot
+    st.session_state["ref_cover_settings_open"] = False
+
+
+@st.dialog("封面设置", on_dismiss=_dismiss_cover_settings)
 def _cover_settings(ctx):
     styles = {row["id"]: row for row in release_assets.list_styles()}
     st.session_state.setdefault("ref_cover_style", "clean")
@@ -142,12 +160,19 @@ def _cover_settings(ctx):
                  format_func=lambda ident: styles[ident]["name"], persist_state="session")
     st.selectbox("画面比例", ["9:16", "16:9", "1:1"], key="ref_cover_aspect", persist_state="session")
     st.number_input("截取位置（秒）", min_value=0.0, step=0.5, key="ref_cover_frame_time", persist_state="session")
-    if st.button("保存设置", key="ref_cover_settings_save", type="primary", width="stretch"):
-        ctx.submit_stage("release", {"cover_title": st.session_state["ref_cover_title"],
-                                    "cover_style": st.session_state["ref_cover_style"],
-                                    "cover_aspect": st.session_state["ref_cover_aspect"],
-                                    "cover_frame_time": st.session_state["ref_cover_frame_time"]})
-        st.rerun()
+    if st.button("保存设置", key="ref_cover_settings_save", type="primary", width="stretch", disabled=_busy(ctx)):
+        try:
+            if st.session_state.get("ref_script_text", "").strip():
+                ctx._ensure_project({"cover_title": st.session_state["ref_cover_title"],
+                                     "cover_style": st.session_state["ref_cover_style"],
+                                     "cover_aspect": st.session_state["ref_cover_aspect"],
+                                     "cover_frame_time": st.session_state["ref_cover_frame_time"]})
+            st.session_state["ref_last_message"] = "封面设置已保存；点击自动生成封面查看效果。"
+            st.session_state["ref_cover_settings_open"] = False
+            st.session_state.pop("ref_cover_settings_before", None)
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
 
 
 def _export_bundle(video, cover, title, description, tags):
@@ -255,6 +280,7 @@ def render(ctx):
     st.session_state.setdefault("ref_publish_time", now.time().replace(second=0, microsecond=0))
     video = _path(ctx.current_video(rendered=True), "video_path")
     source_text = _source_text(ctx)
+    busy = _busy(ctx)
     with st.container(key="ref_release_info"):
         st.markdown("**发布信息**")
         with st.container(border=True, key="ref_release_copy_strip"):
@@ -264,8 +290,8 @@ def render(ctx):
                 st.caption("生成后可继续编辑，发布时带入")
             with action:
                 if st.button("✦ 智能生成", key="ref_publish_generate_copy", type="primary", width="stretch",
-                             disabled=len(re.sub(r"\s+", "", source_text)) < 20):
-                    ctx.queue("publish_copy", "生成发布标题与标签", _generate_copy,
+                             disabled=busy or len(re.sub(r"\s+", "", source_text)) < 20):
+                    _queue(ctx, "publish_copy", "生成发布标题与标签", _generate_copy,
                               source_text, app_config=_config_snapshot())
         st.caption("✓ 标题 " + str(len(st.session_state["ref_publish_title"])) + " 字　　✓ 标签 "
                    + str(len(_tags(st.session_state["ref_publish_tags"]))) + " 个")
@@ -284,15 +310,19 @@ def render(ctx):
             generate, settings = st.columns([1.8, 1], gap="small")
             with generate:
                 if st.button("自动生成封面", key="ref_cover_generate", type="primary", width="stretch",
-                             disabled=not video or not st.session_state.get("ref_publish_title", "").strip()):
-                    ctx.queue("cover", "生成封面", release_assets.generate_cover, video,
+                             disabled=busy or not video or not st.session_state.get("ref_publish_title", "").strip()):
+                    _queue(ctx, "cover", "生成封面", release_assets.generate_cover, video,
                               st.session_state.get("ref_cover_title") or st.session_state["ref_publish_title"],
                               style=st.session_state.get("ref_cover_style", "clean"),
                               aspect=st.session_state.get("ref_cover_aspect", "9:16"),
                               frame_time=float(st.session_state.get("ref_cover_frame_time", 0.0)))
             with settings:
-                if st.button("⚙ 封面设置", key="ref_cover_settings", width="stretch"):
-                    _cover_settings(ctx)
+                if st.button("⚙ 封面设置", key="ref_cover_settings", width="stretch", disabled=busy):
+                    st.session_state["ref_cover_settings_before"] = {
+                        "project_id": (getattr(ctx, "project", {}) or {}).get("id", ""),
+                        "values": {key: st.session_state.get(key) for key in ("ref_cover_title", "ref_cover_style", "ref_cover_aspect", "ref_cover_frame_time")},
+                    }
+                    st.session_state["ref_cover_settings_open"] = True
         cover = _path(ctx.current_cover(), "cover_path")
         with st.container(key="ref_release_cover_preview"):
             label, expand, download = st.columns([6, 1, 1], gap="small", vertical_alignment="center")
@@ -321,7 +351,7 @@ def render(ctx):
         with st.container(key="ref_release_publish_actions"):
             publish, schedule = st.columns(2, gap="small")
             if publish.button("发布", key="ref_publish_open", type="primary", width="stretch",
-                              disabled=not video or not selected or not st.session_state["ref_publish_title"].strip()):
+                              disabled=busy or not video or not selected or not st.session_state["ref_publish_title"].strip()):
                 try:
                     snapshot = _snapshot(ctx, selected)
                     with st.spinner("正在准备发布预览…"):
@@ -338,3 +368,5 @@ def render(ctx):
             label.caption("发布时间")
             date.date_input("发布日期", key="ref_publish_date", label_visibility="collapsed", format="YYYY-MM-DD")
             clock.time_input("发布时间", key="ref_publish_time", label_visibility="collapsed")
+    if st.session_state.get("ref_cover_settings_open"):
+        _cover_settings(ctx)

@@ -409,7 +409,7 @@ def render_script_column(ctx):
     with st.container(key="ref_script_controls"):
         mode = st.segmented_control(
             "学习方式", ["IP学习", "视频学习", "爆款文案"],
-            key="ref_learning_mode", label_visibility="collapsed", width="stretch", persist_state="session",
+            key="ref_learning_mode", label_visibility="collapsed", width="stretch", persist_state="session", disabled=_busy(ctx),
         )
         previous_mode = st.session_state.get("ref_previous_learning_mode", "视频学习")
         st.session_state["ref_previous_learning_mode"] = mode
