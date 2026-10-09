@@ -148,6 +148,85 @@ class ReferenceScriptTests(unittest.TestCase):
         self.assertTrue(app.text_area(key="ref_original_text").disabled)
         self.assertTrue(app.button(key="ref_write_script").disabled)
         self.assertTrue(app.button(key="ref_open_video").disabled)
+        self.assertTrue(app.button(key="ref_review_script").disabled)
+
+    def review(self, source, optimized):
+        start = source.index("绝对")
+        return {"source_text": source, "optimized_text": optimized, "engine": "configured_llm",
+                "summary": "可能存在保证性措辞，需核查范围。", "risks": [
+                    {"quote": "绝对", "start": start, "end": start + 2, "category": "保证性措辞",
+                     "reason": "可能被理解为无条件保证。", "suggestion": "使用中性限定，保留事实。"}]}
+
+    def test_risk_review_queues_the_exact_current_editor_text_without_rewriting_it(self):
+        app = self.app()
+        self.assertTrue(app.button(key="ref_review_script").disabled)
+        source = "  当前工具绝对适合每个人，售价99元。\n"
+        app.text_area(key="ref_script_text").set_value(source).run()
+        app.button(key="ref_review_script").click().run()
+        self.assertFalse(app.exception)
+        queued = app.session_state["ref_test_queue"]
+        self.assertEqual(queued["kind"], "script_review")
+        self.assertEqual(queued["operation"], "app.services.creator.script_review.review_script")
+        self.assertEqual(queued["kwargs"]["text"], source)
+        self.assertEqual(app.text_area(key="ref_script_text").value, source)
+        self.model.assert_not_called()
+
+    def test_report_adoption_is_explicit_and_deferred_until_next_context_render(self):
+        app = self.app()
+        source = "这款工具绝对适合每个人，售价99元。"
+        optimized = source.replace("绝对", "可能")
+        app.text_area(key="ref_script_text").set_value(source).run()
+        app.session_state["ref_script_review_result"] = self.review(source, optimized)
+        app.session_state["ref_script_review_open"] = True
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertNotIn("ref_script_review_adopt_pending", app.session_state)
+        app.button(key="ref_review_adopt").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["ref_script_review_adopt_pending"], {
+            "source_text": source, "optimized_text": optimized, "project_id": ""})
+        self.assertEqual(app.text_area(key="ref_script_text").value, source)
+        self.assertFalse(app.session_state["ref_script_review_open"])
+
+    def test_changed_draft_disables_old_report_and_direct_adoption_guard_rejects_it(self):
+        app = self.app()
+        source = "这款工具绝对适合每个人。"
+        report = self.review(source, source.replace("绝对", "可能"))
+        edited = "我已经核对并手工修改了当前稿件。"
+        app.text_area(key="ref_script_text").set_value(edited).run()
+        app.session_state["ref_script_review_result"] = report
+        app.session_state["ref_script_review_open"] = True
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.button(key="ref_review_adopt").disabled)
+        session = {"ref_script_text": edited}
+        class Context:
+            busy = False
+            project = {"id": "current"}
+        with patch.object(column.st, "session_state", session), patch.object(column.st, "warning"):
+            self.assertFalse(column._stage_review_adoption(Context(), report))
+        self.assertNotIn("ref_script_review_adopt_pending", session)
+
+    def test_local_report_displays_source_label_and_cannot_adopt_an_unchanged_draft(self):
+        app = self.app()
+        source = "这款工具绝对适合每个人。"
+        app.text_area(key="ref_script_text").set_value(source).run()
+        report = self.review(source, source)
+        report["engine"] = "local_rules"
+        app.session_state["ref_script_review_result"] = report
+        app.session_state["ref_script_review_open"] = True
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.button(key="ref_review_adopt").disabled)
+        self.assertTrue(any("本地措辞初筛" in item.value for item in app.caption))
+
+    def test_highlighted_original_escapes_user_html_and_keeps_quote_positions(self):
+        source = "<script>alert('x')</script>绝对有效。"
+        report = self.review(source, source)
+        markup = column._highlight_review_source(report)
+        self.assertNotIn("<script>", markup)
+        self.assertIn("&lt;script&gt;", markup)
+        self.assertIn("绝对</mark>", markup)
 
 
 if __name__ == "__main__":

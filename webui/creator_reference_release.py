@@ -5,6 +5,9 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 import re
+import io
+import zipfile
+import hashlib
 
 import streamlit as st
 
@@ -147,6 +150,50 @@ def _cover_settings(ctx):
         st.rerun()
 
 
+def _export_bundle(video, cover, title, description, tags):
+    """Export only the approved media and text, never account or service secrets."""
+    if not video or not Path(video).is_file():
+        raise ValueError("请先生成可播放的成片。")
+    memory = io.BytesIO()
+    with zipfile.ZipFile(memory, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.write(video, "成片" + Path(video).suffix)
+        if cover and Path(cover).is_file():
+            archive.write(cover, "封面" + Path(cover).suffix)
+        archive.writestr("发布文案.txt", "标题：" + title + "\n\n" + description + "\n\n" + tags)
+        archive.writestr("使用说明.txt", "上传成片和封面，粘贴发布文案；登录自己的账号并按平台要求检查，确认后提交。此包没有执行发布，也不包含账号登录或服务配置。")
+    return memory.getvalue()
+
+
+@st.dialog("快手／视频号发布助手", width="large")
+def _native_publish_assistant(ctx):
+    st.caption("使用平台原生后台发布：先下载视频、封面与文案，再登录自己的账号并上传确认。")
+    left, right = st.columns(2)
+    left.link_button("打开快手创作者后台", "https://cp.kuaishou.com/", width="stretch")
+    right.link_button("打开视频号助手", "https://channels.weixin.qq.com/", width="stretch")
+    video, cover = _path(ctx.current_video(rendered=True), "video_path"), _path(ctx.current_cover(), "cover_path")
+    if not video:
+        st.info("请先生成成片，再下载发布包。")
+        return
+    title = st.session_state.get("ref_publish_title", "")
+    description = st.session_state.get("ref_publish_description", "")
+    tags = st.session_state.get("ref_publish_tags", "")
+    stamps = [title, description, tags]
+    for value in (video, cover):
+        path = Path(value) if value else None
+        stamps.append(str(path.resolve()) + str(path.stat().st_mtime_ns) + str(path.stat().st_size) if path and path.is_file() else "")
+    fingerprint = hashlib.sha256("\n".join(stamps).encode("utf-8")).hexdigest()
+    if st.session_state.get("ref_native_bundle_source") != fingerprint:
+        st.session_state.pop("ref_native_release_bundle", None)
+    st.session_state["ref_native_bundle_source"] = fingerprint
+    st.text("标题：" + title)
+    st.text(description + "\n" + tags)
+    if st.button("准备发布包", key="ref_native_prepare_package", type="primary"):
+        st.session_state["ref_native_release_bundle"] = _export_bundle(video, cover, title, description, tags)
+    data = st.session_state.get("ref_native_release_bundle")
+    if data:
+        st.download_button("下载视频、封面和文案", data, file_name="发布素材包.zip", mime="application/zip", key="ref_native_download_bundle")
+
+
 @st.dialog("封面预览")
 def _cover_preview(path):
     st.image(path, width="stretch")
@@ -269,6 +316,8 @@ def render(ctx):
         if accounts_button.button("♙ 账号管理", key="ref_publish_accounts", width="stretch"):
             _open_accounts(ctx)
         selected = _platform_picker(publishing.list_accounts())
+        if st.button("快手／视频号发布助手", key="ref_native_publish_assistant", width="stretch"):
+            _native_publish_assistant(ctx)
         with st.container(key="ref_release_publish_actions"):
             publish, schedule = st.columns(2, gap="small")
             if publish.button("发布", key="ref_publish_open", type="primary", width="stretch",

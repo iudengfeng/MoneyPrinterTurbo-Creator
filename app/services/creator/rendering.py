@@ -11,10 +11,10 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
-from . import extract, store
+from . import extract, processing, store
 
 _ASPECTS = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}
-_POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right", "center"}
+_POSITIONS = processing.POSITIONS
 _PRESETS = (
     {"id": "clean", "name": "清爽口播", "description": "留白标题与清晰字幕，保留原画面颜色。", "color_grade": "none", "subtitle_style": "clean"},
     {"id": "bold", "name": "醒目观点", "description": "黄色强调与大字字幕，适合简短观点。", "color_grade": "vivid", "subtitle_style": "bold"},
@@ -236,8 +236,8 @@ def _write_captions(path, captions):
 
 
 def _validate_pip(items, duration):
-    if not isinstance(items, (list, tuple)) or len(items) > 5:
-        raise ValueError("画中画最多支持 5 个素材。")
+    if not isinstance(items, (list, tuple)) or len(items) > 32:
+        raise ValueError("画中画最多支持 32 段素材。")
     result = []
     for item in items:
         if not isinstance(item, dict):
@@ -249,7 +249,8 @@ def _validate_pip(items, duration):
         if not all(math.isfinite(value) for value in (start, end, size)) or not 0 <= start < end <= duration + 0.05:
             raise ValueError("画中画时间必须位于成片内，结束时间应大于开始时间。")
         position = item.get("position", "top-right")
-        if position not in _POSITIONS or not 0.15 <= size <= 0.6:
+        mode, padding = item.get("mode", "window"), float(item.get("padding", .02))
+        if mode not in {"window", "full"} or not math.isfinite(padding) or not 0 <= padding <= .2 or position not in _POSITIONS or not 0.15 <= size <= 0.6:
             raise ValueError("画中画位置或尺寸无效，尺寸应在 15%～60% 之间。")
         if path.suffix.lower() in _IMAGE_TYPES:
             from PIL import Image
@@ -272,7 +273,7 @@ def _validate_pip(items, duration):
         else:
             raise ValueError("画中画支持 PNG、JPG、WEBP 图片及 MP4、MOV、M4V、WEBM、MKV 视频。")
         result.append({"path": str(path), "start": start, "end": min(duration, end), "position": position, "size": size,
-                       "kind": kind, "width": width, "height": height, "sourceDuration": source_duration})
+                       "kind": kind, "width": width, "height": height, "sourceDuration": source_duration, "mode": mode, "padding": padding})
     return result
 
 
@@ -341,7 +342,8 @@ def _mix_audio(visual, output, audio, bgm, duration, volume, log):
 
 
 def render_video(video_path, audio_path=None, subtitle_path=None, title="", template="talking", bgm_path=None, aspect="9:16", image_path=None, progress=None,
-                 *, style="clean", color_grade="none", subtitle_style="clean", bgm_volume=0.12, auto_subtitles=False, pip_items=None, source_subtitles_burned=False, video_fit="contain"):
+                 *, style="clean", color_grade="none", subtitle_style="clean", bgm_volume=0.12, auto_subtitles=False, pip_items=None, source_subtitles_burned=False, video_fit="contain", processing_options=None):
+    options = processing.normalize(processing_options or {})
     if template not in {"talking", "pip", "cards"} or aspect not in _ASPECTS:
         raise ValueError("不支持的模板或画幅。")
     if style not in {row["id"] for row in _PRESETS} or color_grade not in {"none", "warm", "cool", "vivid"} or subtitle_style not in {"clean", "bold", "yellow", "none"}:
@@ -411,7 +413,21 @@ def render_video(video_path, audio_path=None, subtitle_path=None, title="", temp
             srt = transcription["srt_path"]
             entries = transcription.get("segments")
         captions = entries if entries else (read_srt(srt) if srt else [])
-        width, height = _ASPECTS[aspect]
+        if options["silence_trim"]:
+            from . import pacing
+            edited = pacing.prepare_media(source["path"], audio["path"] if audio["has_audio"] else None, srt, captions,
+                                          folder / "pacing", enabled=True, threshold_db=options["silence_threshold"],
+                                          min_silence=options["silence_min_duration"], progress=progress)
+            if edited.get("removed_seconds", 0) > 0:
+                source = probe_source(edited["video_path"])
+                audio = probe_source(edited["audio_path"])
+                duration = edited["duration"]
+                captions = edited["segments"]
+                srt = edited.get("srt_path") or ""
+                items = processing.remap_pip(items, edited["timeline"])
+                video_timing = _video_timing(source, extract.ffmpeg_binary())
+            base.update(duration=duration, removed_seconds=edited.get("removed_seconds", 0), edit_timeline=edited.get("timeline", []))
+        width, height = processing.dimensions(aspect, options["output_resolution"])
         prepared = prepare_captions(captions, duration, width, subtitle_style)
         if srt and not prepared:
             raise ValueError("字幕时间轴与所选音轨没有交集，请换成这段口播对应的字幕。")
@@ -423,7 +439,9 @@ def render_video(video_path, audio_path=None, subtitle_path=None, title="", temp
         payload = {"video": source["path"], "videoFrames": max(1, math.ceil(video_timing["duration"] * 30)), "image": legacy_image["path"] if legacy_image else None,
                    "title": base["title"], "template": template, "style": style, "colorGrade": color_grade, "subtitleStyle": subtitle_style, "videoFit": video_fit,
                    "width": width, "height": height, "fps": 30, "durationInFrames": math.ceil(duration * 30), "captions": prepared,
-                   "pipItems": items, "output": str(visual), "silent": True}
+                   "pipItems": items, "processing": options, "output": str(visual), "silent": True}
+        base.update(output_resolution=options["output_resolution"], highlight_keywords=options["highlight_keywords"],
+                    green_screen=options["green_screen"], beauty_strength=options["beauty_strength"], pip_items=items)
         request = folder / "request.json"
         request.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
         if progress:

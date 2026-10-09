@@ -195,7 +195,7 @@ class CreatorRenderingTest(unittest.TestCase):
             with self.subTest(item=item), self.assertRaises(ValueError):
                 rendering._validate_pip([item], 3)
         with self.assertRaises(ValueError):
-            rendering._validate_pip([valid]*6, 3)
+            rendering._validate_pip([valid]*33, 3)
 
     def test_pip_video_is_rendered_only_in_requested_time_window(self):
         result = self._render(pip_items=[{'path': str(self.video), 'start': 0.7, 'end': 1.5, 'position': 'bottom-right'}])

@@ -621,6 +621,29 @@ if st.button('导入原片', key='test_import_video'):
         self.assertEqual(app.session_state["ref_cover_path"], cover)
         self.update_mock.assert_not_called()
 
+    def test_risk_report_requires_explicit_adoption_and_rejects_stale_text(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            controller.ReferenceContext()
+            source = session["ref_script_text"]
+            self.completed(session, "script_review", {"source_text": source, "optimized_text": "审阅后的新稿", "risks": []})
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_script_text"], source)
+            self.assertTrue(session["ref_script_review_open"])
+            session["ref_script_text"] = "用户已经重新修改"
+            session["ref_script_review_adopt_pending"] = {"source_text": source, "optimized_text": "审阅后的新稿", "project_id": "work-a"}
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_script_text"], "用户已经重新修改")
+        self.update_mock.assert_not_called()
+
+    def test_explicit_risk_adoption_is_applied_before_native_widget_initialization(self):
+        app = self.app()
+        source = app.text_area(key="ref_script_text").value
+        app.session_state["ref_script_review_adopt_pending"] = {"source_text": source, "optimized_text": "确定采用的口播正文", "project_id": "work-a"}
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.text_area(key="ref_script_text").value, "确定采用的口播正文")
+        self.assertEqual(self.projects["work-a"]["config"]["input_text"], "确定采用的口播正文")
+
     def test_one_click_pipeline_preserves_each_nonblank_publish_edit(self):
         with self.state({}, {"project": "work-a"}) as (session, _):
             controller.ReferenceContext()

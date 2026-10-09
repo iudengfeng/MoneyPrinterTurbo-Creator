@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from app.services.creator import extract, jobs, rendering, store, workflow
+from app.services.creator import extract, jobs, processing, rendering, store, workflow
 
 
 def _file(value):
@@ -27,20 +27,30 @@ def _defaults(project):
         "ref_original_text": script, "ref_script_text": script,
         "ref_voice_id": config.get("voice_id", "edge:zh-CN-XiaoxiaoNeural"),
         "ref_avatar_id": config.get("avatar_id", ""), "ref_speed": config.get("speed", 1.0),
+        "ref_allow_paid": config.get("allow_paid", False),
         "ref_avatar_mode": config.get("avatar_mode", "mixed"),
         "ref_allow_reference_reuse": config.get("allow_reference_reuse", False),
         "ref_subtitles": config.get("subtitle_style", "clean") != "none",
         "ref_subtitle_style": config.get("subtitle_style", "clean") if config.get("subtitle_style") != "none" else "clean",
         "ref_color_grade": config.get("color_grade", "cool"), "ref_video_fit": config.get("video_fit", "cover"),
         "ref_bgm_volume": config.get("bgm_volume", 0.12), "ref_cover_style": config.get("cover_style", "clean"),
-        "ref_cover_aspect": config.get("aspect", "9:16"),
+        "ref_cover_title": config.get("cover_title") or config.get("release_title", ""), "ref_cover_frame_time": config.get("cover_frame_time", 0.),
+        "ref_cover_aspect": config.get("cover_aspect") or config.get("aspect", "9:16"),
         "ref_bgm_enabled": bool(config.get("bgm_path")), "ref_bgm_path": config.get("bgm_path", ""),
-        "ref_resolution": "720P", "ref_publish_title": config.get("release_title", ""),
+        "ref_resolution": config.get("output_resolution", "720P"), "ref_publish_title": config.get("release_title", ""),
         "ref_publish_tags": " ".join(config.get("hashtags", [])),
         "ref_publish_description": config.get("description", ""), "ref_cover_path": "",
         "ref_word_count": 300, "ref_sidebar_view": "首页", "ref_theme": "light",
         "ref_creation_mode": "one_click",
         "ref_pending_actions": {}, "ref_last_message": "",
+        "ref_pip_items": config.get("pip_items", []),
+        "ref_silence_trim": config.get("silence_trim", False), "ref_silence_threshold": config.get("silence_threshold", -40.),
+        "ref_silence_min_duration": config.get("silence_min_duration", .7),
+        "ref_green_screen": config.get("green_screen", False), "ref_green_background_path": config.get("green_background_path", ""),
+        "ref_green_color": config.get("green_color", "#00ff00"), "ref_green_similarity": config.get("green_similarity", .12),
+        "ref_beauty_strength": config.get("beauty_strength", 0.),
+        **{"ref_highlight_" + group: "\n".join(config.get("highlight_keywords", {}).get(name, [])) for group, name in
+           (("main", "main"), ("description", "description"), ("action", "action"), ("emotion", "emotion"))},
     }
 
 
@@ -73,11 +83,32 @@ class ReferenceContext:
                 st.session_state[key] = value
         if changed:
             for key in ("ref_voice_audio_result", "ref_imported_video", "ref_imported_voice_video", "ref_audio_history",
-                        "ref_media_preferences_pending", "ref_video_import_failure"):
+                        "ref_media_preferences_pending", "ref_video_import_failure", "ref_script_review_result", "ref_script_review_open",
+                        "ref_script_review_adopt_pending", "ref_asset_choice_pending", "ref_pip_items_pending", "ref_imported_transcript"):
                 st.session_state.pop(key, None)
+            for key in ("ref_asset_browser", "ref_processing_open", "ref_pip_open"):
+                st.session_state.pop(key, None)
+            st.session_state.pop("ref_native_release_bundle", None)
         st.session_state["ref_loaded_project"] = marker
         self._consume_completed()
         self._apply_media_preferences()
+        self._apply_pending_edits()
+
+    def _apply_pending_edits(self):
+        for pending_key in ("ref_asset_choice_pending", "ref_pip_items_pending", "ref_script_review_adopt_pending"):
+            value = st.session_state.pop(pending_key, None)
+            if not isinstance(value, dict) or value.get("project_id", "") != self.project.get("id", ""):
+                continue
+            if pending_key == "ref_asset_choice_pending" and value.get("field") in {"ref_voice_id", "ref_avatar_id"}:
+                st.session_state[value["field"]] = value["value"]
+            elif pending_key == "ref_pip_items_pending":
+                st.session_state["ref_pip_items"] = value["items"]
+            elif pending_key == "ref_script_review_adopt_pending":
+                if value.get("source_text") != st.session_state.get("ref_script_text") or self.busy:
+                    st.session_state["ref_last_error"] = "文案已变化或有任务运行，请重新审阅后采用。"
+                    continue
+                st.session_state["ref_script_text"] = value["optimized_text"]
+                self.save_script(value["optimized_text"])
 
     def stage(self, name):
         return dict(self.project.get("stages", {}).get(name, {}).get("result", {}))
@@ -98,6 +129,7 @@ class ReferenceContext:
             "input_mode": "script", "input_text": str(st.session_state.get("ref_script_text", "")).strip(),
             "voice_id": st.session_state.get("ref_voice_id") or "edge:zh-CN-XiaoxiaoNeural",
             "speed": st.session_state.get("ref_speed", 1.0),
+            "allow_paid": bool(st.session_state.get("ref_allow_paid", False)),
             "avatar_id": st.session_state.get("ref_avatar_id") or "",
             "kind": "avatar" if st.session_state.get("ref_avatar_id") else self.project.get("config", {}).get("kind", "knowledge"),
             "avatar_mode": st.session_state.get("ref_avatar_mode", "mixed"),
@@ -112,6 +144,11 @@ class ReferenceContext:
             # The import may run after this event's radio was already rendered.
             # Keep its old mixed value from undoing the saved full-video choice.
             config.update(kind="avatar", avatar_mode="full", allow_reference_reuse=False)
+        config.update({key: st.session_state.get("ref_" + key, self.project.get("config", {}).get(key, default))
+                       for key, default in processing.DEFAULTS.items() if key in processing.RENDER_FIELDS and key not in {"output_resolution", "highlight_keywords"}})
+        config["output_resolution"] = st.session_state.get("ref_resolution", "720P")
+        config["highlight_keywords"] = {name: [term.strip() for term in str(st.session_state.get("ref_highlight_" + name, "")).splitlines() if term.strip()]
+                                       for name in ("main", "description", "action", "emotion")}
         return config
 
     def _pending_media_preferences(self):
@@ -154,6 +191,8 @@ class ReferenceContext:
             changes.update(audio_path="", source_video_path="")
             st.session_state.pop("ref_voice_audio_result", None)
             st.session_state.pop("ref_imported_video", None)
+            st.session_state["ref_cover_path"] = ""
+            st.session_state.pop("ref_native_release_bundle", None)
         self._ensure_project(changes)
 
     def queue(self, kind, label, operation, *args, **kwargs):
@@ -330,6 +369,11 @@ class ReferenceContext:
                 self.use_media("audio", result.get("audio_path", ""))
             elif kind == "cover" and isinstance(result, dict):
                 st.session_state["ref_cover_path"] = _file(result.get("cover_path"))
+            elif kind == "script_review" and isinstance(result, dict):
+                st.session_state["ref_script_review_result"] = result
+                st.session_state["ref_script_review_open"] = True
+            elif kind in {"voice_sample", "avatar_profile"}:
+                st.session_state["ref_last_message"] = "素材已保存，可在音色或形象列表中选择。"
             elif kind == "publish_copy" and isinstance(result, dict):
                 titles = result.get("titles") or []
                 st.session_state["ref_publish_title"] = result.get("title") or (titles[0] if titles else "")

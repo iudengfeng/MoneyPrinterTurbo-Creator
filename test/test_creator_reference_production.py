@@ -139,28 +139,34 @@ _import_video(st.session_state['test_ctx'])
         })])
         self.engine.assert_called_once()
 
-    def test_only_720p_can_be_selected_and_missing_service_remains_an_explicit_error(self):
+    def test_export_sizes_can_be_selected_and_missing_service_remains_an_explicit_error(self):
         app = self.app(ref_resolution="1080P")
-        self.assertEqual(app.session_state["ref_resolution"], "720P")
-        self.assertTrue(any("已切换到 720P" in item.value for item in app.caption))
-        self.assertTrue(app.button(key="ref_resolution_576p").disabled)
-        self.assertTrue(app.button(key="ref_resolution_1080p").disabled)
+        self.assertEqual(app.session_state["ref_resolution"], "1080P")
+        self.assertFalse(app.button(key="ref_resolution_576p").disabled)
+        self.assertFalse(app.button(key="ref_resolution_1080p").disabled)
         self.assertFalse(app.button(key="ref_resolution_720p").disabled)
-        app.button(key="ref_resolution_1080p").click().run()
-        self.assertEqual(app.session_state["ref_resolution"], "720P")
+        app.button(key="ref_resolution_576p").click().run()
+        self.assertEqual(app.session_state["ref_resolution"], "576P")
         self.engine.return_value = {"available": False, "reason": "本机 Duix 尚未配置"}
         app.button(key="ref_generate_avatar").click().run()
         self.assertFalse(self.context.submissions)
         self.assertTrue(any("尚未配置" in item.value for item in app.error))
 
     def test_unsupported_resolution_is_also_guarded_when_a_request_bypasses_the_picker(self):
-        with patch.object(production.st, "session_state", {"ref_resolution": "1080P"}):
-            with self.assertRaisesRegex(ValueError, "仅支持 720P"):
+        with patch.object(production.st, "session_state", {"ref_resolution": "4KP"}):
+            with self.assertRaisesRegex(ValueError, "导出分辨率"):
                 production._avatar_request(self.context, self.profiles[0])
-            with self.assertRaisesRegex(ValueError, "仅支持 720P"):
+            with self.assertRaisesRegex(ValueError, "导出分辨率"):
                 production._render_request(self.context)
         self.assertFalse(self.context.submissions)
         self.engine.assert_not_called()
+
+    def test_cloud_clone_requires_explicit_service_choice_before_provider_request(self):
+        with patch.object(production.st, "session_state", {"ref_script_text": "这是待配音正文", "ref_allow_paid": False}):
+            with self.assertRaisesRegex(ValueError, "云端克隆服务"):
+                production._voice_request(self.context, {"id": "saved:clone", "provider": "voxcpm"})
+        self.assertFalse(self.context.queued)
+        self.provider.assert_not_called()
 
     def test_missing_profile_remains_empty_and_opens_existing_identity_tool(self):
         self.profiles = []
@@ -170,8 +176,9 @@ _import_video(st.session_state['test_ctx'])
         app.button(key="ref_generate_avatar").click().run()
         self.assertFalse(self.context.submissions)
         self.assertTrue(any("请选择形象" in item.value for item in app.error))
-        app.button(key="ref_manage_avatar").click().run()
-        self.assertEqual(self.context.tools, ["数字人"])
+        with patch("webui.creator_reference_assets.avatar_browser") as gallery:
+            app.button(key="ref_manage_avatar").click().run()
+        gallery.assert_called_once()
 
     def test_render_subtitles_music_and_styles_reach_pipeline_and_edits_survive(self):
         music = self.file("chosen-track.wav")
@@ -181,6 +188,7 @@ _import_video(st.session_state['test_ctx'])
         app.toggle(key="ref_subtitles").set_value(False).run()
         app.toggle(key="ref_bgm_enabled").set_value(True).run()
         app.slider(key="ref_bgm_volume").set_value(0.23).run()
+        app.button(key="ref_open_processing_settings").click().run()
         app.selectbox(key="ref_color_grade").set_value("warm").run()
         app.selectbox(key="ref_video_fit").set_value("cover").run()
         app.radio(key="ref_creation_mode").set_value("step_by_step").run()
@@ -233,7 +241,7 @@ _import_video(st.session_state['test_ctx'])
         app.text_area(key="ref_highlight_action").set_value("立即开始").run()
         app.radio(key="ref_highlight_group").set_value("主词").run()
         self.assertEqual(app.text_area(key="ref_highlight_main").value, "核心观点")
-        self.assertTrue(any("未应用高亮" in item.value for item in app.caption))
+        self.assertTrue(any("匹配词" in item.value for item in app.caption))
         app.button(key="ref_generate_render").click().run()
         self.assertFalse(any("highlight" in key for key in self.context.submissions[0][1]))
 

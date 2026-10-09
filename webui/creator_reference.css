@@ -183,6 +183,21 @@ body:has(.st-key-reference_workbench) [data-testid="stDialog"] h3 {color:var(--r
 .st-key-ref_resolution_720p button[kind="primary"] {background:var(--ref-field)!important;border:1px solid #8ac4b4!important;box-shadow:0 0 0 1px #8ac4b433!important;}
 .st-key-ref_resolution_720p button[kind="primary"] p {color:var(--ref-text)!important;}
 .st-key-ref_resolution_720p button:after {content:"✓";position:absolute;right:6px;top:3px;color:#75baa8;font-size:13px;}
+/* Native dialog panels use the same palette as the four-column workbench. */
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] button {border-radius:10px;}
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] button[kind="primary"] {background:linear-gradient(105deg,#488afb,#7953fc)!important;border:0!important;color:#fff!important;}
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] button[kind="primary"] p {color:#fff!important;}
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] [data-testid="stSelectbox"] [role="group"],
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] [data-testid="stNumberInputContainer"],
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] [data-baseweb="input"],
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] textarea {background:var(--ref-field)!important;color:var(--ref-text)!important;border-color:var(--ref-line)!important;}
+body:has(.st-key-reference_workbench) [data-testid="stDialog"] input {color:var(--ref-text)!important;}
+.st-key-ref_processing_settings {gap:12px!important;}
+.st-key-ref_pip_coverage {max-height:230px;overflow:auto;background:var(--ref-card);}
+.st-key-ref_resolution button[kind="primary"] {background:var(--ref-soft)!important;border:1px solid #8ac4b4!important;}
+.st-key-ref_resolution button[kind="primary"] p {color:var(--ref-text)!important;}
+.st-key-ref_resolution_720p button:after {display:none;}
+.st-key-ref_resolution button[kind="primary"]:after {content:"✓";display:block;position:absolute;right:6px;top:3px;color:#75baa8;font-size:13px;}
 @media(min-width:1750px){div[class*="st-key-ref_panel_"]{padding:0 12px 12px!important;} .st-key-reference_workbench textarea{font-size:13px!important;} .st-key-ref_avatar_preview,.st-key-ref_render_preview{height:350px!important;} .st-key-reference_workbench video{max-height:285px!important;max-width:162px!important;} .ref-cover-empty{height:230px;} .ref-step-heading strong{font-size:17px;}}
 @media(max-width:1100px){body:has(.st-key-reference_workbench) [data-testid="stSidebar"]{width:175px!important;min-width:175px!important;} .st-key-ref_sidebar_navigation button{padding:0 14px!important;} .st-key-ref_sidebar_navigation button p{font-size:15px!important;} .ref-brand strong{font-size:18px;} .ref-online,.ref-agent{display:none;} .st-key-reference_workbench>[data-testid="stVerticalBlock"]>[data-testid="stHorizontalBlock"]{flex-wrap:wrap;} .st-key-reference_workbench>[data-testid="stVerticalBlock"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"]{min-width:calc(50% - 7px)!important;} div[class*="st-key-ref_panel_"]{min-height:880px;max-height:none;}}
 @media(max-width:1100px){

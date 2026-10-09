@@ -16,7 +16,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import avatar, brand_profiles, competitors, content_templates, extract, jobs, narration, quality, release_assets, rendering, spoken_library, store, topics
+from . import avatar, brand_profiles, competitors, content_templates, extract, jobs, narration, processing, quality, release_assets, rendering, spoken_library, store, topics
 
 STAGES = ("script", "voice", "visuals", "render", "release")
 _KIND = "creator_projects"
@@ -45,6 +45,9 @@ _FIELDS = {
     "render": {"template", "style", "subtitle_style", "bgm_path", "bgm_volume", "color_grade", "video_fit", "image_path"},
     "release": {"release_title", "description", "hashtags", "cover_style", "cover_frame_time"},
 }
+_DEFAULTS.update(copy.deepcopy(processing.DEFAULTS))
+_FIELDS["render"].update(processing.RENDER_FIELDS)
+_FIELDS["release"].update(processing.RELEASE_FIELDS)
 
 
 def _now():
@@ -63,6 +66,7 @@ def _normalize(config, *, previous=None):
         raise ValueError("未知作品设置：" + ", ".join(sorted(unknown)))
     result = copy.deepcopy(_DEFAULTS)
     result.update(copy.deepcopy(config))
+    result.update(processing.normalize(result))
     for field, choices in {
         "input_mode": {"script", "topic"}, "kind": {"knowledge", "montage", "product", "avatar"},
         "avatar_mode": {"mixed", "full"},
@@ -299,6 +303,9 @@ def _file_stamp(path):
 def _fingerprint(project, stage):
     config = project["config"]
     values = {key: config.get(key) for key in sorted(_FIELDS[stage])}
+    for key, default in processing.DEFAULTS.items():
+        if key in values and (key not in config or values[key] == default):
+            values.pop(key)
     # Empty defaults are omitted so opening an existing work never invalidates
     # a completed paid request. Pasted text does not depend on a writing brief.
     if stage == "script" and config["input_mode"] == "topic" and any(config.get(key) for key in _BRIEF_FIELDS):
@@ -310,6 +317,10 @@ def _fingerprint(project, stage):
             values[key] = _file_stamp(values[key])
     if "materials" in values:
         values["materials"] = [{"metadata": item, "file": _file_stamp(item if isinstance(item, str) else item.get("path", item.get("media_path", item.get("file_path"))))} for item in values["materials"]]
+    if "pip_items" in values:
+        values["pip_items"] = [{"metadata": item, "file": _file_stamp(item["path"])} for item in (values["pip_items"] or [])]
+    if "green_background_path" in values:
+        values["green_background_path"] = _file_stamp(values["green_background_path"])
     previous = STAGES[:STAGES.index(stage)]
     values["upstream"] = [{"fingerprint": project["stages"][name].get("fingerprint"), "result": project["stages"][name].get("result", {})} for name in previous]
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
@@ -590,10 +601,11 @@ def _execute(ident, stage, project, progress):
                 subtitle_path=srt, title="", template=config["template"], style=config["style"],
                 subtitle_style=config["subtitle_style"], bgm_path=config["bgm_path"] or None,
                 bgm_volume=config["bgm_volume"], color_grade=config["color_grade"], aspect=config["aspect"],
-                video_fit=config["video_fit"], image_path=config["image_path"] or None, progress=progress)
+                video_fit=config["video_fit"], image_path=config["image_path"] or None, progress=progress,
+                pip_items=config.get("pip_items", []), processing_options={key: config.get(key, value) for key, value in processing.DEFAULTS.items() if key in processing.RENDER_FIELDS})
             _checkpoint(ident, stage, result=saved)
         report = quality.inspect_video(saved["video_path"], subtitle_path=saved.get("srt_path") or srt,
-                                       expected_duration=voice["duration"], progress=progress)
+                                       expected_duration=saved.get("duration", voice["duration"]), progress=progress)
         saved["quality"] = report
         _checkpoint(ident, stage, result=saved)
         if not report["pass"]:
@@ -605,8 +617,9 @@ def _execute(ident, stage, project, progress):
     text = project["stages"]["script"]["result"]["text"]
     title = config["release_title"] or re.split(r"[。！？!?\n]", text)[0].strip()[:50] or project["title"][:50]
     if not _exists(saved.get("cover_path")):
-        saved.update(release_assets.generate_cover(render["video_path"], title, style=config["cover_style"],
-                                                   aspect=config["aspect"], frame_time=config["cover_frame_time"], progress=progress))
+        frame_time = config.get("cover_frame_fraction", 0) * render.get("duration", 0) or config["cover_frame_time"]
+        saved.update(release_assets.generate_cover(render["video_path"], config.get("cover_title") or title, style=config["cover_style"],
+                                                   aspect=config.get("cover_aspect") or config["aspect"], frame_time=frame_time, progress=progress))
         _checkpoint(ident, stage, result=saved)
     materials = release_assets.save_materials(render["video_path"], title, description=config["description"],
                                               hashtags=config["hashtags"], cover_path=saved["cover_path"], source_text=text)

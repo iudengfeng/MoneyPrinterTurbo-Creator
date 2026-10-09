@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import extract
+from . import extract, processing
 
 _STYLES = {"clean", "bold", "knowledge", "business"}
 _ACCENTS = {"clean": "#ffffff", "bold": "#ffe34d", "knowledge": "#8ad7ff", "business": "#ede4ca"}
@@ -78,6 +78,24 @@ def _captions(payload, duration):
     return sorted(result, key=lambda row: (row["start"], row["end"]))
 
 
+def highlighted_text(text, groups):
+    """Mark original caption words only; every user string remains HTML escaped."""
+    terms = {}
+    for group in ("main", "description", "action", "emotion"):
+        for term in groups.get(group, []):
+            terms.setdefault(term, group)
+    if not terms:
+        return html.escape(text)
+    pattern = re.compile("|".join(re.escape(term) for term in sorted(terms, key=len, reverse=True)))
+    result, offset = [], 0
+    for match in pattern.finditer(text):
+        result.append(html.escape(text[offset:match.start()]))
+        result.append(f'<span class="hl-{terms[match.group()]}">{html.escape(match.group())}</span>')
+        offset = match.end()
+    result.append(html.escape(text[offset:]))
+    return "".join(result)
+
+
 def _point_cards(captions, duration, style):
     """Extract original phrases only; never invent product claims or prices."""
     if style == "clean":
@@ -118,6 +136,7 @@ def _prepare_font_asset(assets):
 def build_overlay_html(payload, *, font_asset=None) -> str:
     """Build offline composition; all user text remains escaped HTML text."""
     width, height, fps, frames, duration = _settings(payload)
+    options = processing.normalize(payload.get("processing") or {})
     style, subtitle = payload.get("style", "clean"), payload.get("subtitleStyle", "clean")
     accent = _ACCENTS[style]
     captions = _captions(payload, duration)
@@ -140,12 +159,12 @@ def build_overlay_html(payload, *, font_asset=None) -> str:
         animations.append('tl.fromTo("#title", {opacity:0,y:-18}, {opacity:1,y:0,duration:0.32,ease:"power2.out"}, 0);')
     if subtitle != "none":
         for index, row in enumerate(captions):
-            content = html.escape(row["text"])
+            content = highlighted_text(row["text"], options["highlight_keywords"])
             caption_html.append(f'<div id="caption-{index}" class="clip caption" data-start="{row["start"]:.9f}" '
                                 f'data-duration="{row["end"]-row["start"]:.9f}" data-track-index="10">'
                                 f'<span>{content}</span></div>')
             entrance = min(0.12, (row["end"] - row["start"]) / 3)
-            animations.append(f'tl.fromTo("#caption-{index} span", {{y:5}}, {{y:0,duration:{entrance:.9f},ease:"power2.out"}}, {row["start"]:.9f});')
+            animations.append(f'tl.fromTo("#caption-{index} > span", {{y:5}}, {{y:0,duration:{entrance:.9f},ease:"power2.out"}}, {row["start"]:.9f});')
     points = []
     for index, row in enumerate(_point_cards(captions, duration, style)):
         points.append(f'<div id="point-{index}" class="clip point" data-start="{row["start"]:.9f}" '
@@ -166,7 +185,9 @@ def build_overlay_html(payload, *, font_asset=None) -> str:
 .title{{position:absolute;top:{height*.047:.3f}px;left:6%;right:6%;padding:{width*.019:.3f}px {width*.025:.3f}px;font-size:{title_size:.3f}px;line-height:1.38;background:{title_bg};color:{title_color};border-radius:14px;border-left:{width*.009:.3f}px solid {accent};overflow-wrap:anywhere}}
 .title span{{display:block;white-space:pre-wrap}}
 .caption{{position:absolute;bottom:{height*.105:.3f}px;left:7%;right:7%;display:flex;justify-content:center}}
-.caption span{{display:block;max-width:100%;padding:{width*.015:.3f}px {width*.022:.3f}px;border-radius:12px;background:#000b;color:{caption_color};font-size:{caption_size:.3f}px;line-height:1.35;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;text-shadow:0 2px 5px #000,0 -1px 2px #000;border-bottom:3px solid {accent};}}
+.caption > span{{display:block;max-width:100%;padding:{width*.015:.3f}px {width*.022:.3f}px;border-radius:12px;background:#000b;color:{caption_color};font-size:{caption_size:.3f}px;line-height:1.35;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;text-shadow:0 2px 5px #000,0 -1px 2px #000;border-bottom:3px solid {accent};}}
+.caption .hl-main{{color:#ffe34d;font-weight:900}} .caption .hl-description{{color:#9bd7ff;font-weight:850}}
+.caption .hl-action{{color:#99ffbd;font-weight:850}} .caption .hl-emotion{{color:#ffc1eb;font-weight:850}}
 .point{{position:absolute;bottom:27%;left:6%;width:42%;max-height:22%;overflow:hidden;}}
 .point span{{display:block;padding:{width*.016:.3f}px {width*.020:.3f}px;border-radius:12px;background:#101828d9;font-size:{point_size:.3f}px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;border-left:4px solid {accent};box-shadow:0 8px 24px #0004}}
 .footer-line{{position:absolute;bottom:3.5%;left:6%;right:6%;height:3px;background:{accent};opacity:.7}}
@@ -280,6 +301,7 @@ def _even(value):
 
 def composite_command(payload, overlay_path):
     width, height, fps, frames, duration = _settings(payload)
+    options = processing.normalize(payload.get("processing") or {})
     video = Path(payload.get("video", "")).resolve()
     if not video.is_file():
         raise ValueError("底层人物或素材视频不存在。")
@@ -294,8 +316,25 @@ def composite_command(payload, overlay_path):
     grade = {"none": "", "warm": ",colorbalance=rs=.035:bs=-.025,eq=saturation=1.06:brightness=.008",
              "cool": ",colorbalance=rs=-.025:bs=.035,eq=saturation=.93:contrast=1.025",
              "vivid": ",eq=saturation=1.15:contrast=1.07:brightness=.015"}[payload.get("colorGrade", "none")]
+    if options["beauty_strength"]:
+        strength = options["beauty_strength"]
+        grade += f",hqdn3d={1+strength*3:.3f}:{1+strength*3:.3f}:3:3,eq=brightness={strength*.035:.6f}"
     common = f"fps={fps},trim=end_frame={frames},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={1/fps:.9f},setsar=1"
-    if template == "pip":
+    if options["green_screen"]:
+        background = Path(options["green_background_path"] or "").resolve()
+        if not background.is_file():
+            raise ValueError("已开启绿幕，请先上传背景图片或视频。")
+        if background.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+            command += ["-loop", "1", "-i", str(background)]
+        else:
+            command += ["-stream_loop", "-1", "-i", str(background)]
+        filters.append(f"[{next_index}:v]{_fit_filter(width,height,'cover')},fps={fps},trim=duration={duration:.9f},setpts=PTS-STARTPTS[bg]")
+        next_index += 1
+        color = "0x" + options["green_color"][1:]
+        key_filter = f"chromakey={color}:{options['green_similarity']:.6f}:{options['green_blend']:.6f}"
+        filters.append(f"[0:v]{common},{_fit_filter(width,height,fit)}{grade},format=yuva420p,{key_filter}[source]")
+        filters.append("[bg][source]overlay=0:0:eof_action=pass:format=auto[base]")
+    elif template == "pip":
         background = Path(payload.get("image") or "").resolve()
         if not background.is_file():
             raise ValueError("画中画模板背景图片不存在。")
@@ -323,19 +362,17 @@ def composite_command(payload, overlay_path):
         if item.get("kind") == "image":
             command += ["-loop", "1", "-i", str(path)]
         else:
-            command += ["-stream_loop", "-1", "-i", str(path)]
-        box_w = _even(width*size)
+            command += ["-i", str(path)]
+        full = item.get("mode", "window") == "full"
+        box_w = width if full else _even(width*size)
         ratio = _number(item.get("height", 9), "素材高度", 1, 20000) / _number(item.get("width", 16), "素材宽度", 1, 20000)
-        box_h = _even(min(height*.42, box_w*ratio))
-        filters.append(f"[{next_index}:v]{_fit_filter(box_w,box_h,'contain')},fps={fps},trim=duration={end-start:.9f},setpts=PTS-STARTPTS+{start:.9f}/TB[pip{index}]")
-        gap, position = int(width*.045), item.get("position", "top-right")
-        if position == "center":
-            x, y = int((width-box_w)/2), int((height-box_h)/2)
-        elif position in {"top-left", "top-right", "bottom-left", "bottom-right"}:
-            x = gap if "left" in position else width-gap-box_w
-            y = int(height*.19) if position.startswith("top") else int(height*.77)-box_h
-        else:
+        box_h = height if full else _even(min(height*.42, box_w*ratio))
+        filters.append(f"[{next_index}:v]{_fit_filter(box_w,box_h,'cover' if full else 'contain')},fps={fps},tpad=stop_mode=clone:stop_duration={end-start:.9f},trim=duration={end-start:.9f},setpts=PTS-STARTPTS+{start:.9f}/TB[pip{index}]")
+        gap, position = int(width*_number(item.get("padding", .02), "边距", 0, .2)), item.get("position", "top-right")
+        if position not in processing.POSITIONS:
             raise ValueError("画中画位置无效。")
+        x = 0 if full else gap if position.endswith("left") else width-gap-box_w if position.endswith("right") else int((width-box_w)/2)
+        y = 0 if full else int(height*item.get("padding", .02)) if position.startswith("top") else height-int(height*item.get("padding", .02))-box_h if position.startswith("bottom") else int((height-box_h)/2)
         label = f"base{index}"
         filters.append(f"[{current}][pip{index}]overlay={x}:{y}:enable='gte(t,{start:.9f})*lt(t,{end:.9f})':eof_action=pass[{label}]")
         next_index, current = next_index+1, label

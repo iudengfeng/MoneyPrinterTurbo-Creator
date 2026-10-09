@@ -6,11 +6,13 @@ or generated text is installed by the parent before it renders the text widgets.
 from __future__ import annotations
 
 from html import escape
+import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 import streamlit as st
 
-from app.services.creator import extract, store, topics
+from app.services.creator import extract, script_review, store, topics
 
 
 def _busy(ctx):
@@ -152,6 +154,20 @@ def _reference_library(ctx, *, prefix="ref_library"):
 
 
 def _account_profile(ctx):
+    from app.services.creator import competitors
+    with st.expander("主页链接学习", expanded=False):
+        homepage = st.text_input("参考博主的公开主页或作品列表", key="ref_ip_homepage", max_chars=2000)
+        st.caption("读取可访问的公开正文并加入参考库。登录限制或未公开完整口播时，可导入作品分享链接、本地视频或自己提供的原文。")
+        if st.button("读取公开内容", key="ref_ip_collect", type="primary", disabled=_busy(ctx) or not homepage.strip()):
+            try:
+                settings = competitors.get_settings()
+                sources = settings["sources"]
+                if not any((item if isinstance(item, str) else item.get("url")) == homepage.strip() for item in sources):
+                    competitors.save_settings({"sources": [*sources, {"url": homepage.strip()}]})
+                if _submit(ctx, "ip_collect", "读取公开参考内容", competitors.collect_once):
+                    _close_dialog()
+            except Exception as exc:
+                st.error(str(exc))
     rows = topics.list_accounts()
     names = {row["id"]: row["name"] for row in rows}
     options = [None, *names]
@@ -247,6 +263,95 @@ def _generate(ctx, *, rewrite):
         st.rerun(scope="app")
 
 
+def _request_review(ctx):
+    text = st.session_state.get("ref_script_text", "")
+    if not text.strip():
+        st.warning("请先填写要审阅的口播文案。")
+        return
+    from app.config import config
+    snapshot = deepcopy(config.snapshot_config_with_pending(config.app))
+    if _submit(ctx, "script_review", "AI 法务 · 文案风险审阅", script_review.review_script,
+               text=text, app_config=snapshot):
+        st.session_state.pop("ref_script_dialog", None)
+        st.rerun(scope="app")
+
+
+def _dismiss_review():
+    st.session_state["ref_script_review_open"] = False
+
+
+def _stage_review_adoption(ctx, report):
+    if _busy(ctx):
+        st.warning("当前任务正在处理，请完成后再采用。")
+        return False
+    source = report.get("source_text")
+    optimized = report.get("optimized_text")
+    if not isinstance(source, str) or source != st.session_state.get("ref_script_text", ""):
+        st.warning("文案已修改，请重新审阅当前稿件后再采用。")
+        return False
+    if not isinstance(optimized, str) or not optimized.strip() or optimized == source:
+        st.info("本次报告保留原文，可按风险建议手动修改后重新审阅。")
+        return False
+    st.session_state["ref_script_review_adopt_pending"] = {
+        "source_text": source, "optimized_text": optimized,
+        "project_id": (getattr(ctx, "project", None) or {}).get("id", ""),
+    }
+    _dismiss_review()
+    return True
+
+
+def _highlight_review_source(report):
+    source = report.get("source_text", "")
+    cursor, parts = 0, []
+    for risk in sorted(report.get("risks", []), key=lambda row: row.get("start", 0)):
+        start, end = risk.get("start"), risk.get("end")
+        if (type(start) is not int or type(end) is not int or not cursor <= start < end <= len(source)
+                or source[start:end] != risk.get("quote")):
+            continue
+        parts.extend((escape(source[cursor:start]), '<mark style="background:#ffe4e8;color:#8e223c;border-radius:3px">',
+                      escape(source[start:end]), "</mark>"))
+        cursor = end
+    parts.append(escape(source[cursor:]))
+    return '<div style="white-space:pre-wrap;max-height:245px;overflow:auto;padding:12px;border:1px solid var(--ref-line,#dce2ec);border-radius:10px">' + "".join(parts) + "</div>"
+
+
+@st.dialog("AI 法务审校报告", width="medium", on_dismiss=_dismiss_review)
+def _review_dialog(ctx):
+    report = st.session_state.get("ref_script_review_result")
+    if not isinstance(report, dict):
+        st.info("尚无审阅报告，请先提交当前文案。")
+        return
+    local = report.get("engine") == "local_rules"
+    st.caption("来源：本地措辞初筛" if local else "来源：已配置文案模型辅助审阅")
+    st.caption("仅提示潜在风险与待核查事项；事实、适用规则和平台审核结果仍需核对。")
+    risks = report.get("risks") or []
+    st.warning(f"标注 {len(risks)} 处待核查表达") if risks else st.info("本次未标注风险，仍需核查事实与发布要求。")
+    st.markdown("**01 原文案分析**")
+    st.markdown(_highlight_review_source(report), unsafe_allow_html=True)
+    st.markdown("**02 优化后文案**")
+    optimized = report.get("optimized_text", "")
+    key = hashlib.sha256((report.get("source_text", "") + optimized).encode("utf-8")).hexdigest()[:16]
+    st.text_area("优化后文案", value=optimized, height=200, disabled=True,
+                 key="ref_review_optimized_" + key, label_visibility="collapsed")
+    st.markdown("**03 审阅解读**")
+    st.text(report.get("summary", ""))
+    for index, risk in enumerate(risks, 1):
+        with st.expander(f"{index:02d} {risk.get('category', '待核查')} · {risk.get('quote', '')[:35]}"):
+            st.text("原因：" + risk.get("reason", ""))
+            st.text("建议：" + risk.get("suggestion", ""))
+    stale = report.get("source_text") != st.session_state.get("ref_script_text", "")
+    if stale:
+        st.warning("当前稿件与审阅原文不同，重新审阅后才能采用。")
+    close, adopt = st.columns(2, gap="small")
+    if close.button("关闭", key="ref_review_close", width="stretch"):
+        _dismiss_review()
+        st.rerun(scope="app")
+    if adopt.button("采用优化文案", key="ref_review_adopt", type="primary", width="stretch",
+                    disabled=_busy(ctx) or stale or optimized == report.get("source_text") or not optimized.strip()):
+        if _stage_review_adoption(ctx, report):
+            st.rerun(scope="app")
+
+
 def render_script_column(ctx):
     """Render only the body of column 01; the parent supplies its heading."""
     st.session_state.setdefault("ref_original_text", "")
@@ -292,6 +397,14 @@ def render_script_column(ctx):
                 _generate(ctx, rewrite=False)
             if rewrite.button("AI洗稿", key="ref_rewrite_script", type="primary", width="stretch", disabled=_busy(ctx), help="使用现有文案模型改写已提供的正文。"):
                 _generate(ctx, rewrite=True)
+            review, report = st.columns(2, gap="small")
+            if review.button("AI法务", key="ref_review_script", width="stretch",
+                             disabled=_busy(ctx) or not st.session_state["ref_script_text"].strip(),
+                             help="审阅当前文案的潜在风险，查看建议后再决定采用。"):
+                _request_review(ctx)
+            if report.button("查看报告", key="ref_review_report", width="stretch",
+                             disabled=not st.session_state.get("ref_script_review_result")):
+                st.session_state["ref_script_review_open"] = True
     if notice := st.session_state.pop("ref_script_notice", None):
         st.error(notice)
     if open_video:
@@ -303,3 +416,5 @@ def render_script_column(ctx):
     dialog = st.session_state.get("ref_script_dialog")
     if dialog:
         {"video": _video_dialog, "ip": _ip_dialog, "library": _library_dialog}[dialog](ctx)
+    elif st.session_state.get("ref_script_review_open"):
+        _review_dialog(ctx)

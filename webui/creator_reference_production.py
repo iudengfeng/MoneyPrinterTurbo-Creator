@@ -73,6 +73,8 @@ def _voice_request(ctx, option):
         raise ValueError("请先在文案创作中输入完整口播文案。")
     if not option:
         raise ValueError("请选择可用音色；可在声音管理中保存音色或检查本机配音服务。")
+    if option.get("provider") == "voxcpm" and not st.session_state.get("ref_allow_paid", False):
+        raise ValueError("请先允许使用已配置的云端克隆服务，再生成配音。")
     ctx.queue(
         "voice_audio", "生成语音", narration.generate, text, option["id"],
         speed=float(st.session_state.get("ref_speed", 1.0)), emotion="自然",
@@ -80,8 +82,8 @@ def _voice_request(ctx, option):
 
 
 def _avatar_request(ctx, option):
-    if st.session_state.get("ref_resolution", "720P") != "720P":
-        raise ValueError("当前数字人与成片引擎仅支持 720P，请选择 720P 后生成。")
+    if st.session_state.get("ref_resolution", "720P") not in {"576P", "720P", "1080P"}:
+        raise ValueError("请选择可用的导出分辨率。")
     if not option:
         raise ValueError("请选择形象；可在数字人管理中导入人物参考视频。")
     if not option.get("available", True):
@@ -226,29 +228,33 @@ def _apply_video_import(ctx, path):
 
 
 def _resolution_picker(busy):
-    if st.session_state.get("ref_resolution", "720P") != "720P":
+    if st.session_state.get("ref_resolution", "720P") not in {"576P", "720P", "1080P"}:
         st.session_state["ref_resolution"] = "720P"
-        st.caption("当前引擎仅支持 720P，已切换到 720P。")
+        st.caption("已恢复默认 720P。")
     else:
         st.session_state.setdefault("ref_resolution", "720P")
     with st.container(key="ref_resolution"):
         columns = st.columns(3, gap="small")
         for column, resolution in zip(columns, ("576P", "720P", "1080P")):
-            supported = resolution == "720P"
+            supported = resolution == st.session_state["ref_resolution"]
             if column.button(
                 resolution, key="ref_resolution_" + resolution.lower(),
                 type="primary" if supported else "secondary", width="stretch",
-                disabled=busy or not supported,
-            ) and supported:
-                st.session_state["ref_resolution"] = "720P"
-    st.caption("720P 已选 · 576P / 1080P 暂不支持")
+                disabled=busy,
+            ):
+                st.session_state["ref_resolution"] = resolution
+                st.rerun()
+    st.caption("选择导出尺寸；人物源画质取决于原素材，1080P 不增加原片细节。")
 
 
 def render_voice_column(ctx):
     """Render voice selection, real narration and portrait video production."""
     busy = _busy(ctx)
     with st.container(key="ref_voice_card", border=True):
-        st.markdown("**音色**")
+        heading, manage = st.columns([3, 1])
+        heading.markdown("**音色**")
+        if manage.button("音色库", key="ref_manage_voice", disabled=busy):
+            st.session_state["ref_asset_browser"] = "voice"
         selection, action = st.columns([2.2, 1], gap="small", vertical_alignment="center")
         with selection:
             option = _select_asset("选择音色", _options(narration), "ref_voice_id", busy=busy)
@@ -257,6 +263,9 @@ def render_voice_column(ctx):
                 _attempt(_voice_request, ctx, option)
         if not option:
             st.caption("请选择音色")
+        elif option.get("provider") == "voxcpm":
+            st.session_state.setdefault("ref_allow_paid", False)
+            st.checkbox("允许使用已配置的云端克隆服务", key="ref_allow_paid", disabled=busy, persist_state="session")
 
     with st.container(key="ref_voice_settings", border=True):
         st.markdown("**语音设置**")
@@ -280,7 +289,7 @@ def render_voice_column(ctx):
         heading, manage = st.columns([3, 1], gap="small", vertical_alignment="center")
         heading.markdown("**选择形象**")
         if manage.button("管理", key="ref_manage_avatar", width="stretch", disabled=busy):
-            ctx.open_tool("数字人")
+            st.session_state["ref_asset_browser"] = "avatar"
         selection, action = st.columns([2.2, 1], gap="small", vertical_alignment="center")
         with selection:
             profile = _select_asset("请选择形象", _options(avatar), "ref_avatar_id", busy=busy)
@@ -321,8 +330,8 @@ def _music_upload(ctx, busy):
 
 
 def _render_request(ctx):
-    if st.session_state.get("ref_resolution", "720P") != "720P":
-        raise ValueError("当前成片引擎仅支持 720P，请在口播参数中选择 720P。")
+    if st.session_state.get("ref_resolution", "720P") not in {"576P", "720P", "1080P"}:
+        raise ValueError("请选择可用的导出分辨率。")
     enabled = bool(st.session_state.get("ref_bgm_enabled", False))
     bgm = _existing_file(st.session_state.get("ref_bgm_path")) if enabled else None
     if enabled and not bgm:
@@ -342,31 +351,73 @@ def _render_request(ctx):
     })
 
 
+def _dismiss_processing():
+    st.session_state["ref_processing_open"] = False
+
+
+@st.dialog("视频处理设置", width="medium", on_dismiss=_dismiss_processing)
+def _processing_dialog(ctx):
+    busy = _busy(ctx)
+    with st.container(key="ref_processing_settings"):
+        st.markdown("**01 画中画**")
+        st.caption(f"已设置 {len(st.session_state.get('ref_pip_items', []))} 段素材，按真实口播时间出现。")
+        if st.button("设置画中画", key="ref_open_pip", disabled=busy, width="stretch"):
+            st.session_state["ref_pip_open"] = True
+            st.session_state["ref_processing_open"] = False
+            st.rerun(scope="app")
+        st.markdown("**02 自动剪气口**")
+        st.toggle("剪掉较长停顿", key="ref_silence_trim", disabled=busy, persist_state="session")
+        if st.session_state.get("ref_silence_trim"):
+            threshold, minimum = st.columns(2)
+            threshold.number_input("静音阈值（dB）", -70., -15., key="ref_silence_threshold", disabled=busy, persist_state="session")
+            minimum.number_input("最短静音（秒）", .2, 3., step=.1, key="ref_silence_min_duration", disabled=busy, persist_state="session")
+            st.caption("保留短呼吸；音画、字幕和画中画一起调整。")
+        st.markdown("**03 自动绿幕切换**")
+        st.toggle("替换绿幕背景", key="ref_green_screen", disabled=busy, persist_state="session")
+        if st.session_state.get("ref_green_screen"):
+            background = st.file_uploader("上传背景图片或视频", type=["jpg", "png", "webp", "mp4", "mov"], key="ref_green_background_upload", disabled=busy)
+            if background:
+                st.session_state["ref_green_background_path"] = ctx.stage_upload(background)
+            st.color_picker("绿幕颜色", key="ref_green_color", disabled=busy, persist_state="session")
+            st.slider("颜色容差", .01, 1., key="ref_green_similarity", disabled=busy, persist_state="session")
+            st.caption("适用于真实纯色幕布素材；保留原口播声音。")
+        st.slider("画面柔化与亮肤", 0., .5, key="ref_beauty_strength", disabled=busy, persist_state="session")
+        st.session_state.setdefault("ref_color_grade", "none")
+        st.selectbox(
+            "画面色调", ["none", "warm", "cool", "vivid"],
+            format_func=lambda value: {"none": "原色", "warm": "暖色", "cool": "冷色", "vivid": "鲜明"}[value],
+            key="ref_color_grade", disabled=busy, persist_state="session",
+        )
+        st.session_state.setdefault("ref_video_fit", "contain")
+        st.selectbox(
+            "画面适配", ["contain", "cover"],
+            format_func=lambda value: "保留完整画面" if value == "contain" else "铺满画面",
+            key="ref_video_fit", disabled=busy, persist_state="session",
+        )
+        st.session_state.setdefault("ref_subtitle_style", "clean")
+        if st.session_state["ref_subtitle_style"] == "none":
+            st.session_state["ref_subtitle_style"] = "clean"
+        st.selectbox(
+            "字幕样式", ["clean", "bold", "yellow"],
+            format_func=lambda value: {"clean": "清晰字幕", "bold": "醒目字幕", "yellow": "黄色字幕"}[value],
+            key="ref_subtitle_style", disabled=busy, persist_state="session",
+        )
+
+    if st.button("保存设置", key="ref_processing_save", type="primary", width="stretch", disabled=busy):
+        try:
+            if st.session_state.get("ref_script_text", "").strip():
+                ctx._ensure_project()
+            _dismiss_processing()
+            st.rerun(scope="app")
+        except Exception as exc:
+            st.error(str(exc))
+
+
 def render_processing_column(ctx):
     """Render truthful subtitle/music controls and the downloadable final file."""
     busy = _busy(ctx)
-    with st.expander("视频处理设置", expanded=False):
-        with st.container(key="ref_processing_settings"):
-            st.session_state.setdefault("ref_color_grade", "none")
-            st.selectbox(
-                "画面色调", ["none", "warm", "cool", "vivid"],
-                format_func=lambda value: {"none": "原色", "warm": "暖色", "cool": "冷色", "vivid": "鲜明"}[value],
-                key="ref_color_grade", disabled=busy, persist_state="session",
-            )
-            st.session_state.setdefault("ref_video_fit", "contain")
-            st.selectbox(
-                "画面适配", ["contain", "cover"],
-                format_func=lambda value: "保留完整画面" if value == "contain" else "铺满画面",
-                key="ref_video_fit", disabled=busy, persist_state="session",
-            )
-            st.session_state.setdefault("ref_subtitle_style", "clean")
-            if st.session_state["ref_subtitle_style"] == "none":
-                st.session_state["ref_subtitle_style"] = "clean"
-            st.selectbox(
-                "字幕样式", ["clean", "bold", "yellow"],
-                format_func=lambda value: {"clean": "清晰字幕", "bold": "醒目字幕", "yellow": "黄色字幕"}[value],
-                key="ref_subtitle_style", disabled=busy, persist_state="session",
-            )
+    if st.button("视频处理设置", key="ref_open_processing_settings", width="stretch", disabled=busy):
+        st.session_state["ref_processing_open"] = True
 
     with st.container(key="ref_subtitle_card", border=True):
         title, control = st.columns([3, 1], gap="small", vertical_alignment="center")
@@ -391,7 +442,12 @@ def render_processing_column(ctx):
             st.slider("音乐音量", 0.0, 0.4, step=0.01, key="ref_bgm_volume", disabled=busy, persist_state="session")
 
     with st.container(key="ref_highlight_card", border=True):
-        st.markdown("**高亮关键词**")
+        heading, detect = st.columns([1.5, 1])
+        heading.markdown("**高亮关键词**")
+        if detect.button("智能提取", key="ref_extract_keywords", disabled=busy or not st.session_state.get("ref_script_text", "").strip()):
+            from app.services.creator.script_review import extract_keywords
+            for name, words in extract_keywords(st.session_state["ref_script_text"]).items():
+                st.session_state["ref_highlight_" + name] = "\n".join(words)
         st.session_state.setdefault("ref_highlight_group", "主词")
         group = st.radio(
             "关键词类型", list(_HIGHLIGHT_FIELDS), horizontal=True,
@@ -403,7 +459,7 @@ def render_processing_column(ctx):
             "高亮词", key=key, height=100, placeholder="每行输入一个关键词",
             label_visibility="collapsed", disabled=busy, persist_state="session",
         )
-        st.caption("关键词用于包装；当前引擎尚不支持逐词高亮，成片中未应用高亮。")
+        st.caption("字幕中的匹配词会按分组颜色标记，可手动增删。")
 
     with st.container(key="ref_creation_controls"):
         st.session_state.setdefault("ref_creation_mode", "one_click")
@@ -423,3 +479,12 @@ def render_processing_column(ctx):
             if st.button("一键成片" if mode == "one_click" else "生成成片", type="primary", key="ref_generate_render", width="stretch", disabled=busy):
                 _attempt(_render_request, ctx)
     _video_preview(ctx, rendered=True)
+    if st.session_state.get("ref_pip_open") and not st.session_state.get("ref_script_review_open"):
+        from webui.creator_reference_media import render_dialog
+        render_dialog(ctx)
+
+    elif st.session_state.get("ref_processing_open") and not st.session_state.get("ref_script_review_open"):
+        _processing_dialog(ctx)
+    elif st.session_state.get("ref_asset_browser") and not st.session_state.get("ref_script_review_open"):
+        from webui.creator_reference_assets import avatar_browser, voice_browser
+        (voice_browser if st.session_state["ref_asset_browser"] == "voice" else avatar_browser)(ctx)
