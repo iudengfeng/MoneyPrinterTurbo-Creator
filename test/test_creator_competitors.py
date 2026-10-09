@@ -57,6 +57,55 @@ class CompetitorTests(unittest.TestCase):
         self.assertIn("%E5%AE%B6%E5%85%B7", expanded[0]["url"])
         self.assertEqual("教育", expanded[0]["industry"])
 
+    def test_library_selection_uses_requested_sources_without_changing_scheduler(self):
+        self.settings(auto_update=True, keywords=["原关键词"])
+        before = competitors.get_settings()
+        response = page("", selected_rows=[{"title": "真实讲解", "caption": "这是一段关于学习工具的说明，应该根据需求选择。" * 10,
+                                             "likes": 0, "comment_count": 8}])
+        with patch.object(competitors, "_fetch_public", return_value=response) as fetch:
+            result = competitors.collect_selection("新关键词", ["https://example.org/new"], "douyin")
+        fetch.assert_called_once_with("https://example.org/new", None)
+        self.assertEqual(result["engine"], "scrapling")
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(competitors.get_settings(), before)
+        self.assertEqual(topics.list_references()[0]["hot_metrics"]["like"], 0)
+
+    def test_library_keyword_search_reports_barriers_without_pausing_saved_sources(self):
+        self.settings(auto_update=True)
+        before = competitors.get_settings()
+        with patch.object(competitors, "_fetch_public", side_effect=competitors.NeedsUser("需要登录")) as fetch:
+            result = competitors.collect_selection("火锅", platform="douyin")
+        self.assertIn("www.douyin.com/search/", fetch.call_args.args[0])
+        self.assertIn("%E7%81%AB%E9%94%85", fetch.call_args.args[0])
+        self.assertEqual(result["status"], "needs_user")
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(competitors.get_settings(), before)
+
+    def test_library_selection_rejects_private_sources_before_fetch_or_claim(self):
+        with patch.object(competitors, "_fetch_public") as fetch:
+            with self.assertRaises(ValueError):
+                competitors.collect_selection("", ["http://127.0.0.1:8501/"])
+        fetch.assert_not_called()
+        self.assertEqual(competitors.list_runs(), [])
+
+    def test_dynamic_search_login_content_never_enters_the_reference_library(self):
+        response = {"status": 200, "headers": {"content-type": "text/html"}, "html": "<title>抖音搜索</title>",
+                    "visible_text": "登录后即可搜索更多精彩视频\n扫码登录\n验证码登录"}
+        with patch.object(competitors, "_request_public", return_value=response) as worker, patch.object(competitors, "_url", side_effect=lambda value, **kwargs: value):
+            with self.assertRaises(competitors.NeedsUser):
+                competitors._fetch_public("https://www.douyin.com/search/topic", browser=True)
+        worker.assert_called_once_with("https://www.douyin.com/search/topic", None, browser=True)
+        self.assertEqual(topics.list_references(), [])
+
+    def test_search_catalog_text_is_not_misrepresented_as_a_video_manuscript(self):
+        response = page("", url="https://www.douyin.com/search/topic", selected_rows=[
+            {"title": "发现更多精彩视频 - 抖音搜索", "caption": "登录后即可搜索更多精彩视频。"*12}])
+        with patch.object(competitors, "_fetch_public", return_value=response):
+            result = competitors.collect_selection("topic", platform="douyin")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(topics.list_references(), [])
+
     def test_settings_reject_private_urls_and_invalid_options(self):
         for changes in [{"sources": ["http://127.0.0.1:8501"]}, {"sources": ["http://10.0.0.1/a"]},
                         {"sources": ["https://creator.douyin.com"]}, {"sources": ["https://u:p@example.org"]},

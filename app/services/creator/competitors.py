@@ -1,8 +1,9 @@
 """Public competitor research, separate from publishing accounts and analytics.
 
 Scrapling runs in an isolated subprocess with its own dependency directory. Only
-public HTML/JSON is read: no publishing profiles, cookies, media downloads,
-authentication, browser impersonation, or challenge solving are involved.
+public HTML/JSON is read, with an anonymous browser for dynamic search pages.
+No publishing profiles, authentication cookies, media downloads, or challenge
+solving are involved.
 """
 from __future__ import annotations
 
@@ -188,12 +189,53 @@ def _fetch_worker():
             raise ValueError("Public page exceeds 2MB")
         chunks.append(chunk)
         return len(chunk)
-    page = Fetcher.get(request["url"], timeout=18, retries=1, follow_redirects=False,
-                       stealthy_headers=False, impersonate=None,
-                       headers={"User-Agent": "MoneyPrinterTurbo-Creator/PublicResearch", "Accept": "text/html,application/json"},
-                       content_callback=retain, discard_cookies=True)
-    headers = {str(key).lower(): str(value) for key, value in page.headers.items()}
-    body = b"".join(chunks)
+    if request.get("browser"):
+        from scrapling.fetchers import DynamicFetcher
+        captures = []
+        visible = []
+        def setup(browser_page):
+            def route_public(route):
+                try:
+                    _url(route.request.url, resolve=True)
+                except (ValueError, CollectionError):
+                    route.abort()
+                    return
+                if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
+                    route.abort()
+                else:
+                    route.continue_()
+            browser_page.route("**/*", route_public)
+            def capture(response):
+                if len(captures) >= 8 or response.status != 200 or "json" not in response.headers.get("content-type", ""):
+                    return
+                if not any(word in response.url.lower() for word in ("search", "aweme", "note", "video")):
+                    return
+                try:
+                    text = response.text()
+                    if len(text) <= 200_000:
+                        json.loads(text)
+                        captures.append(text)
+                except Exception:
+                    pass
+            browser_page.on("response", capture)
+        def inspect_page(browser_page):
+            browser_page.wait_for_timeout(1500)
+            visible.append(browser_page.locator("body").inner_text(timeout=3000)[:12000])
+        page = DynamicFetcher.fetch(request["url"], headless=True, executable_path=request["browser_path"],
+                                    timeout=20000, wait=1500, network_idle=False, google_search=False,
+                                    page_setup=setup, page_action=inspect_page, additional_args={"service_workers": "block"})
+        html = page.html_content
+        for i, text in enumerate(captures):
+            html += f'<script type="application/json" id="scrapling-public-{i}">' + text.replace("</", "<\\/") + "</script>"
+        body = html.encode("utf-8")
+        headers = {"content-type": "text/html; charset=utf-8"}
+    else:
+        page = Fetcher.get(request["url"], timeout=18, retries=1, follow_redirects=False,
+                           stealthy_headers=False, impersonate=None,
+                           headers={"User-Agent": "MoneyPrinterTurbo-Creator/PublicResearch", "Accept": "text/html,application/json"},
+                           content_callback=retain, discard_cookies=True)
+        headers = {str(key).lower(): str(value) for key, value in page.headers.items()}
+        body = b"".join(chunks)
     if len(body) > _MAX_BODY:
         print(json.dumps({"status": 413, "error": "公开页面超过 2MB，已停止处理。"}, ensure_ascii=False))
         return
@@ -221,10 +263,11 @@ def _fetch_worker():
     except LookupError:
         html = body.decode("utf-8", errors="replace")
     print(json.dumps({"status": page.status, "url": page.url, "headers": {key: headers.get(key, "") for key in ("content-type", "location")},
-                      "html": html, "selected_rows": selected}, ensure_ascii=False))
+                      "html": html, "selected_rows": selected,
+                      "visible_text": visible[0] if request.get("browser") and visible else ""}, ensure_ascii=False))
 
 
-def _request_public(url, selectors=None):
+def _request_public(url, selectors=None, *, browser=False):
     target = dependency_root()
     if not dependency_ready():
         raise NeedsUser("公开采集引擎未安装，请安装独立 Scrapling 依赖后重试。")
@@ -233,9 +276,16 @@ def _request_public(url, selectors=None):
     # Do not propagate API credentials, proxy configuration or a publisher profile.
     env = {key: value for key, value in os.environ.items() if key.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "COMSPEC"}}
     env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    request = {"url": url, "selectors": selectors or {}}
+    if browser:
+        from . import hyperframes
+        path = hyperframes._browser_path()
+        if not path:
+            raise NeedsUser("动态采集浏览器未就绪，请准备浏览器组件或填写可直接读取的公开作品链接。")
+        request.update(browser=True, browser_path=path)
     try:
-        process = subprocess.run(command, input=json.dumps({"url": url, "selectors": selectors or {}}), text=True,
-                                 encoding="utf-8", errors="replace", capture_output=True, timeout=25, env=env,
+        process = subprocess.run(command, input=json.dumps(request), text=True,
+                                 encoding="utf-8", errors="replace", capture_output=True, timeout=45 if browser else 25, env=env,
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CollectionError("公开页面请求超时或采集进程无法启动，请检查网络。") from exc
@@ -249,10 +299,10 @@ def _request_public(url, selectors=None):
     return result
 
 
-def _fetch_public(url, selectors=None):
+def _fetch_public(url, selectors=None, *, browser=False):
     for _ in range(6):
         url = _url(url, resolve=True)
-        result = _request_public(url, selectors)
+        result = _request_public(url, selectors, browser=True) if browser else _request_public(url, selectors)
         status = result.get("status", 0)
         if status in {301, 302, 303, 307, 308}:
             location = result.get("headers", {}).get("location")
@@ -268,6 +318,11 @@ def _fetch_public(url, selectors=None):
         if content_type and not any(kind in content_type for kind in ("html", "json", "text/plain")):
             raise CollectionError("链接返回音视频或其他文件；竞品采集只读取公开网页，不下载素材。")
         result["url"] = url
+        visible = result.get("visible_text") or ""
+        if any(text in visible for text in ("登录后即可搜索", "登录后才能搜索", "请先登录后搜索")):
+            raise NeedsUser("平台要求登录后才能搜索，未取得作品正文。请使用可公开访问的作品链接，或上传本地视频识别；登录提示不会作为文案入库。")
+        if "当前网络异常" in visible and "扫码登录" in visible:
+            raise NeedsUser("平台返回登录／网络异常页面，未取得作品正文，请在浏览器核查来源。")
         _check_barrier(result.get("html", ""), url)
         return result
     raise CollectionError("公开来源跳转过多，已停止采集。")
@@ -706,8 +761,8 @@ def get_run(ident):
     return store.get_record(_RUNS, ident)
 
 
-def _claim(state):
-    settings = get_settings()
+def _claim(state, settings=None, *, record_schedule=True):
+    settings = get_settings() if settings is None else settings
     if not settings["sources"]:
         raise ValueError("请先添加公开竞品来源；只有关键词不会自动读取平台数据。")
     _recover()
@@ -725,8 +780,9 @@ def _claim(state):
                "progress": 0, "message": "准备更新公开口播参考", "items": 0, "imported": 0,
                "filtered": 0, "filter_reasons": {}, "errors": []}
         conn.execute("INSERT INTO records VALUES(?,?,?,?)", (_RUNS, ident, json.dumps(row, ensure_ascii=False), now))
-    store.update_record(_SETTINGS, "default", {"last_run_id": ident, "last_started_at": _now(),
-                        "next_run_at": (datetime.now(timezone.utc) + timedelta(hours=settings["interval_hours"])).isoformat()})
+    if record_schedule:
+        store.update_record(_SETTINGS, "default", {"last_run_id": ident, "last_started_at": _now(),
+                            "next_run_at": (datetime.now(timezone.utc) + timedelta(hours=settings["interval_hours"])).isoformat()})
     return row, True
 
 
@@ -746,7 +802,7 @@ def _expanded_sources(settings):
                 return
 
 
-def _collect_claimed(ident, progress=None):
+def _collect_claimed(ident, progress=None, settings=None):
     handle = _open_lock("collection.lock")
     if handle is None:
         store.update_record(_RUNS, ident, {"state": "interrupted", "message": "另一进程正在更新参考库，请等待完成。", "ended_at": _now()})
@@ -754,12 +810,13 @@ def _collect_claimed(ident, progress=None):
     total, imported, filtered, errors = 0, 0, 0, []
     filter_reasons = {}
     status = "done"
+    isolated = settings is not None
     def report(message, percent):
         store.update_record(_RUNS, ident, {"state": "running", "progress": percent, "message": message})
         if progress:
             progress(message, percent)
     try:
-        settings = get_settings()
+        settings = get_settings() if settings is None else settings
         sources = list(_expanded_sources(settings))
         report("正在读取已配置的公开竞品来源", 1)
         for index, source in enumerate(sources):
@@ -769,8 +826,13 @@ def _collect_claimed(ident, progress=None):
                 time.sleep(settings["request_delay"])
             report(f"正在读取公开来源 {index + 1}/{len(sources)}", int(index / len(sources) * 90))
             try:
-                page = _fetch_public(source["url"], source.get("selectors"))
+                page = (_fetch_public(source["url"], source.get("selectors"), browser=True) if source.get("browser_render") else
+                        _fetch_public(source["url"], source.get("selectors")))
                 items = parse_public_page(page, source)
+                if source.get("browser_render"):
+                    # Search-page SEO/login text is not an individual video's manuscript.
+                    items = [item for item in items if item["source_url"] != source["url"] or
+                             re.fullmatch(r"\d{8,24}|[a-f0-9]{24}|BV[0-9A-Za-z]{10}", item.get("source_id", ""))]
                 if not items:
                     errors.append({"source_url": source["url"], "message": "公开页未提供可用标题或摘要。"})
                 for item in items[:settings["max_items"] - total]:
@@ -784,7 +846,8 @@ def _collect_claimed(ident, progress=None):
             except NeedsUser as exc:
                 errors.append({"source_url": source["url"], "message": str(exc), "needs_user": True})
                 status = "needs_user"
-                store.update_record(_SETTINGS, "default", {"auto_paused": True, "pause_reason": str(exc)})
+                if not isolated:
+                    store.update_record(_SETTINGS, "default", {"auto_paused": True, "pause_reason": str(exc)})
                 break
             except (CollectionError, ValueError) as exc:
                 errors.append({"source_url": source["url"], "message": str(exc)})
@@ -797,12 +860,13 @@ def _collect_claimed(ident, progress=None):
             message = "本次未获取公开竞品内容，请检查来源链接。"
         elif errors:
             message += f" {len(errors)} 个来源未能读取，见任务详情。"
-        if status == "done":
+        if status == "done" and not isolated:
             store.update_record(_SETTINGS, "default", {"auto_paused": False, "pause_reason": ""})
         result = {"id": ident, "status": status, "message": message, "items": total, "imported": imported,
                   "filtered": filtered, "filter_reasons": filter_reasons, "errors": errors}
         store.update_record(_RUNS, ident, {**result, "state": status, "progress": 100, "ended_at": _now()})
-        store.update_record(_SETTINGS, "default", {"last_finished_at": _now()})
+        if not isolated:
+            store.update_record(_SETTINGS, "default", {"last_finished_at": _now()})
         if progress:
             progress(message, 100)
         return result
@@ -819,6 +883,45 @@ def collect_once(progress=None):
     if not created:
         return {"status": "busy", "id": row["id"], "message": "公开参考库已有更新任务，请等待完成。"}
     return _collect_claimed(row["id"], progress)
+
+
+def collect_selection(keyword="", source_urls=None, platform="douyin", progress=None):
+    """Use the actual isolated Scrapling fetcher for a requested library search.
+
+    Ad hoc searches share collection locks but do not alter a saved scheduler.
+    Only accessible public data is imported; login barriers remain explicit.
+    """
+    if not isinstance(keyword, str) or len(keyword) > 100:
+        raise ValueError("关键词最多 100 字。")
+    templates = {
+        "douyin": "https://www.douyin.com/search/{keyword}",
+        "xiaohongshu": "https://www.xiaohongshu.com/search_result?keyword={keyword}",
+        "bilibili": "https://search.bilibili.com/all?keyword={keyword}",
+    }
+    if platform not in templates:
+        raise ValueError("请选择抖音、小红书或 B站。")
+    if source_urls is not None and (not isinstance(source_urls, list) or len(source_urls) > 5
+                                   or any(not isinstance(url, str) for url in source_urls)):
+        raise ValueError("一次最多填写 5 个公开来源链接。")
+    settings = json.loads(json.dumps(get_settings(), ensure_ascii=False))
+    urls = [url.strip() for url in (source_urls or []) if url.strip()]
+    if urls:
+        sources = [{"url": _url(url), "keyword": keyword.strip()} for url in dict.fromkeys(urls)]
+    elif keyword.strip():
+        sources = [{"url": templates[platform].format(keyword=quote(keyword.strip(), safe="")), "keyword": keyword.strip(), "browser_render": True}]
+    else:
+        sources = settings["sources"]
+    if not sources:
+        raise ValueError("请填写关键词或公开来源链接，再开始采集。")
+    settings["sources"] = sources
+    if keyword.strip():
+        settings["keywords"] = [keyword.strip()]
+    row, created = _claim("running", settings, record_schedule=False)
+    if not created:
+        return {"status": "busy", "id": row["id"], "message": "参考库已有采集任务，请等待完成。", "engine": "scrapling"}
+    result = _collect_claimed(row["id"], progress, settings=settings)
+    return dict(result, engine="scrapling", keyword=keyword.strip(), platform=platform,
+                source_urls=[row["url"] for row in _expanded_sources(settings)])
 
 
 def submit_collection():

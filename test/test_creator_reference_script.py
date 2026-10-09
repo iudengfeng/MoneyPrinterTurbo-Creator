@@ -150,6 +150,35 @@ class ReferenceScriptTests(unittest.TestCase):
         self.assertTrue(app.button(key="ref_open_video").disabled)
         self.assertTrue(app.button(key="ref_review_script").disabled)
 
+    def test_viral_library_submits_real_scrapling_service_with_the_selected_query(self):
+        with patch.object(column.competitors, "dependency_ready", return_value=True), patch.object(column.competitors, "_fetch_public") as fetch:
+            app = self.app()
+            app.session_state["ref_learning_mode"] = "爆款文案"
+            app.run()
+            app.text_input(key="ref_viral_keyword").set_value("装修避坑").run()
+            app.selectbox(key="ref_viral_platform").set_value("xiaohongshu").run()
+            app.text_area(key="ref_viral_urls").set_value("https://example.org/owned-public-article").run()
+            app.button(key="ref_viral_collect").click().run()
+            job = app.session_state["ref_test_queue"]
+        self.assertFalse(app.exception)
+        self.assertEqual(job["kind"], "viral_collect")
+        self.assertEqual(job["operation"], "app.services.creator.competitors.collect_selection")
+        self.assertEqual(job["kwargs"], {"keyword": "装修避坑", "source_urls": ["https://example.org/owned-public-article"], "platform": "xiaohongshu"})
+        fetch.assert_not_called()
+        self.model.assert_not_called()
+
+    def test_viral_library_keeps_missing_engine_and_empty_query_explicit(self):
+        with patch.object(column.competitors, "dependency_ready", return_value=False):
+            app = self.app()
+            app.session_state["ref_learning_mode"] = "爆款文案"
+            app.run()
+            self.assertTrue(app.button(key="ref_viral_collect").disabled)
+        with patch.object(column.competitors, "dependency_ready", return_value=True):
+            app.run()
+            app.button(key="ref_viral_collect").click().run()
+            self.assertTrue(any("填写关键词" in row.value for row in app.warning))
+        self.assertNotIn("ref_test_queue", app.session_state)
+
     def review(self, source, optimized):
         start = source.index("绝对")
         return {"source_text": source, "optimized_text": optimized, "engine": "configured_llm",

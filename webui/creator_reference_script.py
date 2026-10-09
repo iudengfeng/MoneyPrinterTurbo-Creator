@@ -12,7 +12,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from app.services.creator import extract, script_review, store, topics
+from app.services.creator import competitors, extract, script_review, store, topics
 
 
 def _busy(ctx):
@@ -132,6 +132,12 @@ def _reference_library(ctx, *, prefix="ref_library"):
         )
         row = by_id[selection]
         st.caption(row.get("source_label", "本地参考资料"))
+        if row.get("source") == "public_competitor":
+            counts = row.get("hot_metrics") or {}
+            for column, (field, label) in zip(st.columns(3), (("like", "点赞"), ("comment", "评论"), ("collect", "收藏"))):
+                value = counts.get(field)
+                column.metric(label, "未取得" if value is None else str(value))
+            st.caption("只显示页面公开的互动数据，不估算播放量或保证爆款。")
         text = row.get("spoken_script") or row.get("full_content") or row.get("text", "")
         st.text_area("已读取的参考正文", value=text, height=220, disabled=True, key=prefix + "_preview_" + selection)
         if row.get("source_url"):
@@ -228,7 +234,43 @@ def _ip_dialog(ctx):
 
 @st.dialog("爆款文案参考库", width="large", on_dismiss=_dismiss_dialog)
 def _library_dialog(ctx):
-    st.caption("这里展示已保存、已读取的参考资料；来源与指标以原始数据为准。")
+    st.caption("采集公开内容、查看真实来源，再选用已读取的文案。")
+    with st.container(key="ref_viral_scrapling", border=True):
+        st.markdown("**从平台寻找参考文案**")
+        keyword, platform = st.columns([2, 1])
+        query = keyword.text_input("行业／关键词", key="ref_viral_keyword", max_chars=100, placeholder="例如：火锅、装修避坑、AI工具", disabled=_busy(ctx), persist_state="session")
+        target = platform.selectbox("平台", ["douyin", "xiaohongshu", "bilibili"],
+                                    format_func=lambda x: {"douyin": "抖音", "xiaohongshu": "小红书", "bilibili": "B站"}[x],
+                                    key="ref_viral_platform", disabled=_busy(ctx), persist_state="session")
+        with st.expander("指定公开来源（可选）"):
+            links = st.text_area("作品、主页或公开内容页面链接", key="ref_viral_urls", height=90, max_chars=5000,
+                                 placeholder="每行一条，最多5条。留空则尝试平台关键词搜索。", disabled=_busy(ctx), persist_state="session")
+        ready = competitors.dependency_ready()
+        st.caption("公开内容采集引擎已就绪" if ready else "Scrapling 未就绪，请在运行环境中准备采集组件。")
+        if st.button("Scrapling 采集", key="ref_viral_collect", type="primary", width="stretch", disabled=_busy(ctx) or not ready):
+            urls = [value.strip() for value in links.splitlines() if value.strip()]
+            if len(urls) > 5:
+                st.warning("一次最多填写5条公开来源。")
+            elif not query.strip() and not urls and not competitors.get_settings()["sources"]:
+                st.warning("请填写关键词或公开来源链接。")
+            elif _submit(ctx, "viral_collect", "采集公开参考文案", competitors.collect_selection,
+                         keyword=query.strip(), source_urls=urls, platform=target):
+                st.rerun(scope="app")
+        st.caption("遇到登录、验证或限流会停止并显示原因；未取得正文的页面不会当作完整口播。")
+    result = st.session_state.get("ref_viral_result")
+    if isinstance(result, dict):
+        st.caption("最近一次采集 · " + (result.get("keyword") or "已选来源"))
+        status = result.get("status")
+        getattr(st, "success" if status == "done" else "warning")(result.get("message", "采集结束"))
+        for error in result.get("errors", []):
+            st.caption(error.get("message", "来源未能读取"))
+            if error.get("source_url"):
+                st.link_button("打开来源核查", error["source_url"])
+        if result.get("filtered"):
+            st.caption("未加入正文参考的内容：" + "；".join(f"{reason}（{count}）" for reason, count in result.get("filter_reasons", {}).items()))
+        for url in result.get("source_urls", []):
+            if status != "done":
+                st.link_button("打开搜索／公开来源", url)
     _reference_library(ctx)
 
 

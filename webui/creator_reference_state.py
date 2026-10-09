@@ -352,6 +352,17 @@ class ReferenceContext:
             if meta["kind"] == "video_import_extract":
                 self._consume_video_import(meta, job)
                 continue
+            if meta["kind"] == "viral_collect":
+                result = job.get("result")
+                if job.get("state") == "done" and isinstance(result, dict):
+                    st.session_state["ref_viral_result"] = result
+                    st.session_state["ref_last_message"] = result.get("message", "采集已结束")
+                    if meta.get("project_id", "") == self.project.get("id", ""):
+                        st.session_state["ref_script_dialog"] = "library"
+                        st.session_state["ref_pending_learning_mode"] = "爆款文案"
+                else:
+                    st.session_state["ref_viral_result"] = {"status": "failed", "message": job.get("message", "采集未完成")}
+                continue
             st.session_state["ref_last_message"] = meta["label"] + " · " + job.get("message", "")
             if job.get("state") != "done":
                 st.session_state["ref_last_error"] = job.get("message", "处理未完成")

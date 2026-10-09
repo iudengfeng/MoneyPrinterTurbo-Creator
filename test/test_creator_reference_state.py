@@ -635,6 +635,18 @@ if st.button('导入原片', key='test_import_video'):
             self.assertEqual(session["ref_script_text"], "用户已经重新修改")
         self.update_mock.assert_not_called()
 
+    def test_scrapling_collection_shows_result_without_overwriting_the_manuscript(self):
+        with self.state({}, {"project": "work-a"}) as (session, _):
+            controller.ReferenceContext()
+            source = session["ref_script_text"]
+            result = {"engine": "scrapling", "status": "needs_user", "message": "需要核查来源", "imported": 0}
+            self.completed(session, "viral_collect", result)
+            controller.ReferenceContext()
+            self.assertEqual(session["ref_viral_result"], result)
+            self.assertEqual(session["ref_script_text"], source)
+            self.assertEqual(session["ref_script_dialog"], "library")
+        self.update_mock.assert_not_called()
+
     def test_explicit_risk_adoption_is_applied_before_native_widget_initialization(self):
         app = self.app()
         source = app.text_area(key="ref_script_text").value

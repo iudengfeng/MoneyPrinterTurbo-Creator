@@ -6,7 +6,7 @@
 
 **Windows 10/11 64位用户优先下载 [Releases 中的 Windows 双击启动包](https://github.com/iudengfeng/MoneyPrinterTurbo-Creator/releases/latest)。**
 
-本版 `creator-v2026.10.09.1` 按口播教程补齐文案风险审校、音色与形象图库、分句画中画、自动剪气口、关键词字幕及绿幕替换，支持三档导出尺寸。保留一键成片与分步制作；平台发布仍需确认。完整记录见[本版更新说明](docs/creator-release-notes.md)。
+本版 `creator-v2026.10.09.2` 将“爆款文案”接入独立 Scrapling，提供平台关键词、动态搜索与公开来源采集。来源和互动数据按实际读取结果展示，登录提示不作为正文。保留教程版制作能力；平台发布仍需确认。完整记录见[本版更新说明](docs/creator-release-notes.md)。
 
 1. 完整解压到可写文件夹，路径可以包含中文或空格。
 2. 双击 **启动数字人口播.cmd**。第一次联网自动准备应用专用运行环境，完成后打开浏览器。
